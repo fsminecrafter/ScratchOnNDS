@@ -127,26 +127,4 @@ static inline u32  keysUp(void)   { return 0; }
 #define SPRITE_PALETTE ((u16*)malloc(512))
 #define REG_MASTER_BRIGHT_SUB (*(vu16*)malloc(2))
 
-// maxmod stubs (audio)
-typedef int mm_sfxhand;
-typedef int mm_word;
-typedef void* mm_addr;
-typedef int mm_stream_formats;
-typedef struct { int dummy; } mm_ds_system;
-typedef struct { int dummy; } mm_ds_sample;
-typedef struct { int sampling_rate, buffer_length; void* callback;
-                 int format, timer; bool manual; } mm_stream;
-static inline void mmInit(mm_ds_system*) {}
-static inline void mmFrame(void) {}
-static inline int  mmLoadEffect(mm_ds_sample*) { return 0; }
-static inline mm_sfxhand mmEffectEx(void*) { return 0; }
-static inline bool mmEffectActive(mm_sfxhand) { return false; }
-static inline void mmEffectCancel(mm_sfxhand) {}
-static inline void mmStreamOpen(mm_stream*) {}
-static inline void mmStreamBegin(void) {}
-static inline void mmStreamClose(void) {}
-typedef enum { MM_SAMPLE_16BIT, MM_SAMPLE_8BIT } MmSampleFormat;
-typedef enum { MM_STREAM_16BIT_MONO } MmStreamFormat;
-typedef enum { MM_TIMER0 } MmTimer;
-#define MM_SAMPLE_16BIT MM_SAMPLE_16BIT
-#define MM_SAMPLE_8BIT  MM_SAMPLE_8BIT
+// maxmod types/functions are in maxmod9.h stub — included separately
