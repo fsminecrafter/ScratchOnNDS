@@ -11,7 +11,7 @@ ifeq ($(strip $(DEVKITPRO)),)
 $(error "Set DEVKITPRO in your environment. export DEVKITPRO=/opt/devkitpro")
 endif
 
-include $(DEVKITPRO)/libnds/ds_rules
+include $(DEVKITARM)/ds_rules
 
 #-------------------------------------------------------------------------------
 TARGET      := ScratchDS
