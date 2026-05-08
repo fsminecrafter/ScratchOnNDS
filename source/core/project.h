@@ -8,7 +8,17 @@
 #include <string>
 #include <vector>
 #include <map>
-#include "jsmn.h"   // needed for jsmntok_t in private method declarations
+
+// Define JSMN_STATIC before including jsmn.h so that jsmn_init() and
+// jsmn_parse() get internal (static) linkage in every translation unit
+// that includes this header.  Without this, the inline definitions in
+// jsmn.h trigger "defined but not used" warnings in TUs that include
+// project.h but never call jsmn functions directly (vm.cpp, renderer.cpp,
+// audio_manager.cpp, etc.).
+#ifndef JSMN_STATIC
+#define JSMN_STATIC
+#endif
+#include "jsmn.h"
 
 // -----------------------------------------------------------------------
 // Asset references (resolved to file paths after extraction)
@@ -16,7 +26,7 @@
 struct ScratchCostume {
     std::string name;
     std::string assetId;    // MD5 hash filename
-    std::string dataFormat; // "png", "svg", "jpg"
+    std::string dataFormat; // "png", "svg", "bmp"
     int bitmapResolution;
     double rotationCenterX;
     double rotationCenterY;
@@ -37,8 +47,8 @@ struct ScratchSound {
     bool isStreamed;         // true if >2MB, stream from SD
     uint8_t* pcmData;        // for small sounds, PCM in RAM
     size_t   pcmSize;
-    int      mmSoundId;      // maxmod sound id
-    std::string streamPath;    // path for SD streaming
+    int      mmSoundId;      // maxmod sound id / bit-depth flag
+    std::string streamPath;  // path for SD streaming
 };
 
 // -----------------------------------------------------------------------
@@ -109,7 +119,7 @@ enum class BlockOpcode {
     SENSING_TIMER,
     SENSING_RESETTIMER,
     SENSING_OF,
-    SENSING_LOUDNESS,       // Microphone input
+    SENSING_LOUDNESS,
     SENSING_ANSWER,
     SENSING_ASKANDWAIT,
     // Operators
@@ -169,7 +179,7 @@ struct ScratchInput {
     bool isShadow;
     std::string blockId;   // reference to another block (reporter)
     // Or a literal value:
-    int    valueType;      // Scratch value types: 4=num,5=positive num, etc.
+    int    valueType;      // Scratch value types: 4=num, 5=positive num, etc.
     std::string strValue;
     double      numValue;
 };
@@ -183,7 +193,7 @@ struct ScratchBlock {
     bool topLevel;
     bool shadow;
     std::map<std::string, ScratchInput>  inputs;
-    std::map<std::string, std::string>   fields; // field name -> value
+    std::map<std::string, std::string>   fields;
 };
 
 // -----------------------------------------------------------------------
@@ -192,7 +202,7 @@ struct ScratchBlock {
 struct ScratchVariable {
     std::string id;
     std::string name;
-    std::string value;  // stored as string, parsed at runtime
+    std::string value;
     bool isCloud;
     bool visible;
 };
@@ -212,10 +222,10 @@ struct ScratchSprite {
     bool isStage;
     bool visible;
     double x, y;
-    double size;       // percentage
-    int direction;     // degrees
+    double size;
+    int direction;
     int currentCostume;
-    std::string rotationStyle;  // "all around", "left-right", "don't rotate"
+    std::string rotationStyle;
     int layerOrder;
 
     std::vector<ScratchCostume> costumes;
@@ -224,14 +234,11 @@ struct ScratchSprite {
     std::map<std::string, ScratchVariable> variables;
     std::map<std::string, ScratchList>     lists;
 
-    // Runtime say/think bubble
     std::string sayMessage;
 
-    // Runtime clone state
     bool isClone;
     int  cloneParentIndex;
-    // OAM state (assigned by renderer)
-    int oamId;
+    int  oamId;
 };
 
 // -----------------------------------------------------------------------
@@ -245,16 +252,14 @@ struct ScratchMeta {
 
 struct ScratchProject {
     ScratchMeta meta;
-    std::vector<ScratchSprite> targets;  // targets[0] is always Stage
-    std::map<std::string, std::string>   broadcasts;   // id -> name
+    std::vector<ScratchSprite> targets;
+    std::map<std::string, std::string>     broadcasts;
     std::map<std::string, ScratchVariable> globalVars;
 
-    std::string extractDir;  // where files live on SD
+    std::string extractDir;
 
-    // Load from a directory containing project.json
     bool load(const char* dir);
 
-    // Helpers
     ScratchSprite* findSprite(const std::string& name);
     ScratchSprite* getStage() { return targets.empty() ? nullptr : &targets[0]; }
 
@@ -262,7 +267,6 @@ private:
     bool parseJson(const char* json, size_t len);
     BlockOpcode opcodeFromStr(const std::string& s);
 
-    // These are defined in project.cpp but were missing from the header
     void parseTarget(const char* json, jsmntok_t* toks,
                      int& i, int numToks, ScratchSprite& sprite);
     void parseCostumes(const char* json, jsmntok_t* toks,
