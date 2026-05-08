@@ -11,6 +11,7 @@ ifeq ($(strip $(DEVKITPRO)),)
 $(error "Set DEVKITPRO in your environment. export DEVKITPRO=/opt/devkitpro")
 endif
 
+LD := arm-none-eabi-g++
 include $(DEVKITARM)/ds_rules
 
 #-------------------------------------------------------------------------------
@@ -59,11 +60,11 @@ CFLAGS      := -g -Wall -O2 -fomit-frame-pointer \
                -DSCRATCHDS_BUILD_DATE=\"$(BUILD_DATE)\" \
                -DDEVKITARM_VERSION=\"$(DEVKITARM_VER)\"
 
-CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions -std=c++14
+CXXFLAGS    := $(CFLAGS) -DJSMN_STATIC -fno-rtti -fno-exceptions -std=c++14
 
 ASFLAGS     := -g $(ARCH)
 
-LDFLAGS     := -specs=ds_arm9.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+LDFLAGS     := -specs=ds_arm9.specs -g -Wl,-Map,$(notdir $*.map)
 
 #-------------------------------------------------------------------------------
 LIBS        := -lfat -lmm9 -lnds9

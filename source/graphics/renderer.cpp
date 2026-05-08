@@ -8,6 +8,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
+#include <algorithm>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 // Include lodepng for PNG loading:
 // #define LODEPNG_NO_COMPILE_ENCODER   (saves RAM)
@@ -125,16 +129,16 @@ void Renderer::renderFrame(ScratchProject& project) {
         if (sprite->costumes.empty()) continue;
         if (oamIdx >= MAX_OAM_SPRITES) break;
 
-        ScratchCostume& cos = sprite->costumes[sprite->currentCostume];
-        if (!cos.gfxPtr) continue;
+        ScratchCostume& costume = sprite->costumes[sprite->currentCostume];
+        if (!costume.gfxPtr) continue;
 
         // Convert Scratch coordinates to NDS screen coordinates
         // Scratch: center=(0,0), X left-right, Y up-down
         // NDS: top-left=(0,0), X right, Y down
         double scaledX = sprite->x * STAGE_SCALE_X;
         double scaledY = -sprite->y * STAGE_SCALE_Y; // invert Y
-        int screenX = (int)(NDS_CENTER_X + scaledX) - cos.width / 2;
-        int screenY = (int)(NDS_CENTER_Y + scaledY) - cos.height / 2;
+        int screenX = (int)(NDS_CENTER_X + scaledX) - costume.width / 2;
+        int screenY = (int)(NDS_CENTER_Y + scaledY) - costume.height / 2;
 
         // Apply size scaling (limited on NDS — OAM doesn't scale, use affine matrix)
         bool scaled = (sprite->size != 100.0);
@@ -159,14 +163,14 @@ void Renderer::renderFrame(ScratchProject& project) {
             oamAffineTransformation(&oamMain, affineIdx, cosA, sinA, -sinA, cosA);
         }
 
-        SpriteSize sz = bestSpriteSize(cos.width, cos.height);
+        SpriteSize sz = bestSpriteSize(costume.width, costume.height);
         oamSet(&oamMain, oamIdx++,
                screenX, screenY,
                0,          // priority
                0,          // palette (256-color uses single palette)
                sz,
                SpriteColorFormat_256Color,
-               cos.gfxPtr,
+               costume.gfxPtr,
                affineIdx,  // affine index (-1 = no transform)
                (affineIdx >= 0), // double size for affine
                false,      // hide
@@ -200,12 +204,12 @@ void Renderer::renderUI(ScratchProject& project, InputHandler& input) {
     consoleClear();
 
     // Print variable monitors
-    iprintf("\x1b[0;0H"); // home
-    iprintf("--- Variables ---\n");
+    printf("\x1b[0;0H"); // home
+    printf("--- Variables ---\n");
     for (auto& sprite : project.targets) {
         for (auto& kv : sprite.variables) {
             if (kv.second.visible) {
-                iprintf("%-10s: %s\n",
+                printf("%-10s: %s\n",
                     kv.second.name.substr(0, 10).c_str(),
                     kv.second.value.substr(0, 12).c_str());
             }
@@ -214,12 +218,12 @@ void Renderer::renderUI(ScratchProject& project, InputHandler& input) {
 
     // Touch indicator
     if (input.isTouching()) {
-        iprintf("\x1b[20;0HTouch: (%3d,%3d)\n",
+        printf("\x1b[20;0HTouch: (%3d,%3d)\n",
                 input.getTouchX(), input.getTouchY());
     }
 
     // Button hints at bottom
-    iprintf("\x1b[22;0H[A]B[X][Y][L][R][^][v][<][>]");
+    printf("\x1b[22;0H[A]B[X][Y][L][R][^][v][<][>]");
 }
 
 // -----------------------------------------------------------------------

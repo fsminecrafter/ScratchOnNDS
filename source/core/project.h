@@ -38,6 +38,7 @@ struct ScratchSound {
     uint8_t* pcmData;        // for small sounds, PCM in RAM
     size_t   pcmSize;
     int      mmSoundId;      // maxmod sound id
+    std::string streamPath;    // path for SD streaming
 };
 
 // -----------------------------------------------------------------------

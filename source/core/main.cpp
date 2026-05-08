@@ -4,15 +4,14 @@
 // Requires: devkitARM, libnds, libfat, maxmod
 // =============================================================================
 
-#include <nds.h>
-#include <nds/arm9/console.h>
-#include <fat.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
 #include <time.h>
-
+#include <nds.h>
+#include <nds/arm9/console.h>
+#include <fat.h>
 #include "core/project.h"
 #include "core/vm.h"
 #include "graphics/renderer.h"
@@ -64,7 +63,7 @@ int main() {
     // Init NDS hardware
     if (!initHardware()) {
         consoleDemoInit();
-        iprintf("Hardware init failed!\n");
+        printf("Hardware init failed!\n");
         while (true) swiWaitForVBlank();
     }
 
@@ -73,7 +72,7 @@ int main() {
 
     if (!fatInitDefault()) {
         consoleDemoInit();
-        iprintf("FAT init failed!\nCheck R4 card & SD.\n");
+        printf("FAT init failed!\nCheck R4 card & SD.\n");
         while (true) swiWaitForVBlank();
     }
 
@@ -125,12 +124,12 @@ int main() {
     // Still nothing — show a waiting screen
     if (!hasProject) {
         consoleDemoInit();
-        iprintf("\n\n  ScratchDS\n\n");
-        iprintf("  No .sb3 project found.\n\n");
-        iprintf("  Place .sb3 files in:\n");
-        iprintf("  fat:/scratch/\n\n");
-        iprintf("  Hold L+R+B to open menu\n");
-        iprintf("  and use Load to browse.\n");
+        printf("\n\n  ScratchDS\n\n");
+        printf("  No .sb3 project found.\n\n");
+        printf("  Place .sb3 files in:\n");
+        printf("  fat:/scratch/\n\n");
+        printf("  Hold L+R+B to open menu\n");
+        printf("  and use Load to browse.\n");
 
         // Wait for L+R+B to open menu (with empty project)
         ScratchProject emptyProject;
@@ -142,8 +141,8 @@ int main() {
     ScratchProject project;
     if (!loadProject(projectPath, project)) {
         consoleDemoInit();
-        iprintf("Failed to load project:\n%.30s\n", projectPath);
-        iprintf("\nHold L+R+B to open menu.\n");
+        printf("Failed to load project:\n%.30s\n", projectPath);
+        printf("\nHold L+R+B to open menu.\n");
         mainLoop(project);
         return 0;
     }
@@ -175,13 +174,13 @@ bool loadProject(const char* sb3Path, ScratchProject& project, bool silent) {
 
     ZipLoader loader;
     if (!loader.extract(sb3Path, extractDir)) {
-        if (!silent) { consoleDemoInit(); iprintf("Extraction failed:\n%s\n", sb3Path); }
+        if (!silent) { consoleDemoInit(); printf("Extraction failed:\n%s\n", sb3Path); }
         return false;
     }
 
     if (!silent) showLoadingScreen("Parsing project.json...", 50);
     if (!project.load(extractDir)) {
-        if (!silent) { consoleDemoInit(); iprintf("Invalid project.json\n"); }
+        if (!silent) { consoleDemoInit(); printf("Invalid project.json\n"); }
         return false;
     }
 
@@ -271,12 +270,12 @@ bool selectProject(char* pathOut, int maxLen) {
 
 void drawFileSelector(const char** files, int count, int selected) {
     consoleClear();
-    iprintf("\n  ScratchDS - Select Project\n");
-    iprintf("  ==========================\n\n");
+    printf("\n  ScratchDS - Select Project\n");
+    printf("  ==========================\n\n");
     for (int i = 0; i < count; i++)
-        iprintf("  %s %.26s\n", (i == selected) ? ">" : " ", files[i]);
-    iprintf("\n  [A] Load  [Up/Down] Select\n");
-    iprintf("  [L+R+B] Skip to Menu\n");
+        printf("  %s %.26s\n", (i == selected) ? ">" : " ", files[i]);
+    printf("\n  [A] Load  [Up/Down] Select\n");
+    printf("  [L+R+B] Skip to Menu\n");
 }
 
 // -----------------------------------------------------------------------
@@ -285,14 +284,14 @@ void drawFileSelector(const char** files, int count, int selected) {
 void showLoadingScreen(const char* message, int progress) {
     consoleDemoInit();
     consoleClear();
-    iprintf("\n\n\n");
-    iprintf("   *** ScratchDS v" SCRATCHDS_VERSION " ***\n\n");
-    iprintf("   %s\n\n", message);
-    iprintf("   [");
+    printf("\n\n\n");
+    printf("   *** ScratchDS v" SCRATCHDS_VERSION " ***\n\n");
+    printf("   %s\n\n", message);
+    printf("   [");
     int filled = progress / 5;
-    for (int i = 0; i < 20; i++) iprintf("%s", i < filled ? "#" : "-");
-    iprintf("] %d%%\n", progress);
-    iprintf("\n   Hold L+R+B for menu\n");
+    for (int i = 0; i < 20; i++) printf("%s", i < filled ? "#" : "-");
+    printf("] %d%%\n", progress);
+    printf("\n   Hold L+R+B for menu\n");
 }
 
 // -----------------------------------------------------------------------
@@ -352,7 +351,7 @@ void onProjectLoad(const char* path) {
 // -----------------------------------------------------------------------
 void drawFPSOverlay() {
     if (!g_settings.showFPSCounter) return;
-    iprintf("\x1b[0;28H" "\x1b[33;1m" "%4.1f" "\x1b[0m", s_currentFPS);
+    printf("\x1b[0;28H" "\x1b[33;1m" "%4.1f" "\x1b[0m", s_currentFPS);
 }
 
 // -----------------------------------------------------------------------

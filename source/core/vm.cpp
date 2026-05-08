@@ -1,3 +1,4 @@
+#define _USE_MATH_DEFINES
 // =============================================================================
 // vm.cpp — Scratch VM execution engine
 // =============================================================================
@@ -5,6 +6,9 @@
 #include "../audio/audio_manager.h"
 #include "../input/input_handler.h"
 #include <math.h>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>

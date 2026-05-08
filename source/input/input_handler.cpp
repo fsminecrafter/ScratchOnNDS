@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <nds/arm9/sound.h>
 
 // -----------------------------------------------------------------------
 // Init
@@ -41,10 +42,8 @@ void InputHandler::update() {
 // Microphone
 // -----------------------------------------------------------------------
 void InputHandler::updateMic() {
-    // Read mic via NDS hardware (uses timer-driven sampling)
-    // micBuffer is filled by mic DMA/timer interrupt in real impl.
-    // Here we use micReadData() from libnds:
-    micReadData(micBuffer, MIC_BUFFER_SIZE, false);
+    // micBuffer is filled by soundMicRecord callback (set in startMicRecording)
+    // Nothing to do here — just compute loudness from existing buffer
 
     // Compute RMS loudness
     long long sum = 0;
@@ -59,14 +58,14 @@ void InputHandler::updateMic() {
 
 void InputHandler::startMicRecording() {
     if (!micActive) {
-        micSetAmp(MIC_AMP_ON, 119); // Enable amp, max gain
+        soundMicRecord(micBuffer, MIC_BUFFER_SIZE * sizeof(s16), MicFormat_12Bit, MIC_SAMPLE_RATE, nullptr);
         micActive = true;
     }
 }
 
 void InputHandler::stopMicRecording() {
     if (micActive) {
-        micSetAmp(MIC_AMP_OFF, 0);
+        soundMicOff();
         micActive = false;
         micLoudness = 0;
     }
