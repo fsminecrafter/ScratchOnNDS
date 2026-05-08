@@ -73,7 +73,6 @@ struct ScratchDSSettings {
         lastProjectPath[0] = '\0';
     }
 
-    // Persist to / load from SD card
     bool save(const char* path = "fat:/scratch/.settings");
     bool load(const char* path = "fat:/scratch/.settings");
 };
@@ -109,29 +108,28 @@ public:
         return inst;
     }
 
-    // Call once after hardware init
     void init(ScratchDSSettings& settings);
 
-    // Call every frame — handles open/close combo, renders menu if open
-    // Returns true if the Scratch VM should be paused this frame
+    // Call every frame.
+    // Performs a single scanKeys() call, caches key state, then dispatches
+    // to input handlers.  No other method calls scanKeys().
+    // Returns true if the Scratch VM should be paused this frame.
     bool update(float dt);
 
-    // Open / close programmatically
     void open();
     void close();
     bool isOpen() const { return open_; }
 
-    // Called when settings are applied (callback to main)
     using ApplyCallback = std::function<void(const ScratchDSSettings&)>;
     using LoadCallback  = std::function<void(const char* path)>;
     void setApplyCallback(ApplyCallback cb) { onApply_ = cb; }
     void setLoadCallback(LoadCallback  cb)  { onLoad_  = cb; }
 
-    // Access current settings (read-only from outside)
     const ScratchDSSettings& getSettings() const { return *settings_; }
 
 private:
-    OverlayMenu() : open_(false), settings_(nullptr) {}
+    OverlayMenu() : open_(false), settings_(nullptr),
+                    cachedKeysDown_(0), cachedKeysHeld_(0) {}
 
     // Rendering
     void render();
@@ -144,9 +142,9 @@ private:
     void renderConfirmLoad();
     void renderHeader(const char* title);
     void renderFooter();
-    void renderCursor(int row);
 
-    // Input handling
+    // Input handling — all read cachedKeysDown_ / cachedKeysHeld_,
+    // never call scanKeys() themselves.
     void handleInput();
     void handleMainInput();
     void handleInfoInput();
@@ -167,28 +165,27 @@ private:
     void startCompile();
     void tickCompile(float dt);
 
-    // Drawing primitives (NDS console + BG tile tricks)
-    void consolePrintf(int x, int y, const char* fmt, ...);
+    // Drawing
     void consoleClear();
-    void drawBox(int x, int y, int w, int h, bool selected);
-    void drawProgressBar(int x, int y, int w, int percent, const char* label);
-    void drawScrollList(int x, int y, int h,
-                        const std::vector<std::string>& items,
-                        int selected, int scrollOffset);
 
     // State
     bool            open_;
     MenuPage        page_;
-    int             cursor_;          // selected row on current page
-    int             scrollOff_;       // scroll offset for lists
+    int             cursor_;
+    int             scrollOff_;
 
     ScratchDSSettings* settings_;
-    ScratchDSSettings  pending_;      // edits in progress
+    ScratchDSSettings  pending_;
+
+    // Cached key state — written once per frame by update(), read by all
+    // handleXxxInput() methods.  Eliminates redundant scanKeys() calls.
+    u32 cachedKeysDown_;
+    u32 cachedKeysHeld_;
 
     // Load browser state
     std::vector<FileEntry> dirEntries_;
     char currentDir_[256];
-    char selectedPath_[256];        // full path of selected .sb3
+    char selectedPath_[256];
 
     // Compile state
     bool   compiling_;
@@ -204,7 +201,7 @@ private:
     float  comboHoldTimer_;
     static constexpr float COMBO_HOLD_REQUIRED = 0.4f;
 
-    // NDS console handles (top screen used for menu when open)
+    // NDS console handle for menu (top screen)
     PrintConsole menuConsole_;
     bool         consoleInited_;
 
@@ -220,19 +217,21 @@ private:
 
 // -----------------------------------------------------------------------
 // Simple on-screen D-pad character picker (for manual path entry)
+// DPadTextInput::update() calls scanKeys() internally because it is used
+// as a standalone modal widget outside the normal menu input flow.
 // -----------------------------------------------------------------------
 class DPadTextInput {
 public:
     DPadTextInput();
     void reset(const char* prompt, const char* initial = "");
-    bool update();          // returns true when ENTER pressed
+    bool update();
     const char* getText() const { return buf_; }
-    void render(int y);     // render at console row y
+    void render(int y);
 
 private:
     char   buf_[256];
     int    len_;
-    int    charSel_;        // index into char table
+    int    charSel_;
     char   prompt_[64];
 
     static const char CHARS[];
