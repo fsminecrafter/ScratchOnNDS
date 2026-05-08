@@ -9,6 +9,8 @@
 #include "core/project.h"
 #include <cstdio>
 #include <cstring>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 // We call opcodeFromStr indirectly by loading a tiny JSON and checking the
 // parsed block opcode. We use the internal helper via a friend trick — or
