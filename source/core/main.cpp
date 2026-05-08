@@ -27,7 +27,8 @@
 #define BOTTOM_SCREEN_W 256
 #define BOTTOM_SCREEN_H 192
 
-// SD card paths
+// SD card paths — NDS is always booted from root of the card via R4.
+// fatInitDefault() mounts the card as "fat:/".
 #define PROJECTS_DIR    "fat:/scratch/"
 #define EXTRACT_DIR     "fat:/scratch/.tmp/"
 #define EXAMPLE_SB3     "fat:/scratch/example/example.sb3"
@@ -38,10 +39,13 @@
 static int   s_frameCount   = 0;
 static float s_fpsTimer     = 0.0f;
 static float s_currentFPS   = 60.0f;
-static clock_t s_lastTick   = 0;
 
 // Global settings (shared with overlay menu)
 static ScratchDSSettings g_settings;
+
+// Sub-screen (bottom) console — initialised ONCE at the very start of main()
+// before anything else, so every printf goes somewhere visible immediately.
+static PrintConsole g_subConsole;
 
 // -----------------------------------------------------------------------
 // Forward declarations
@@ -60,102 +64,161 @@ void drawFPSOverlay();
 // Program entry
 // -----------------------------------------------------------------------
 int main() {
-    // Init NDS hardware
-    if (!initHardware()) {
-        consoleDemoInit();
-        printf("Hardware init failed!\n");
-        while (true) swiWaitForVBlank();
-    }
+    // ── Step 1: Power on everything ────────────────────────────────────
+    powerOn(POWER_ALL);
 
-    showLoadingScreen("ScratchDS v" SCRATCHDS_VERSION, 0);
-    showLoadingScreen("Initialising FAT...", 5);
+    // ── Step 2: Set video modes so consoles have somewhere to render ───
+    // Top screen  (main engine A) → stage / sprites later
+    videoSetMode(MODE_5_2D);
+    vramSetBankA(VRAM_A_MAIN_BG);
+    vramSetBankB(VRAM_B_MAIN_SPRITE);
 
+    // Bottom screen (sub engine B) → text console permanently
+    videoSetModeSub(MODE_0_2D);
+    vramSetBankC(VRAM_C_SUB_BG);
+
+    // ── Step 3: Bring up the sub-screen text console IMMEDIATELY ───────
+    // This is the ONLY place we call consoleInit for the bottom screen.
+    // All showLoadingScreen / printf output goes here.
+    consoleInit(&g_subConsole,
+                3,                  // BG layer 3 on sub engine
+                BgType_Text4bpp,
+                BgSize_T_256x256,
+                31,                 // map base
+                0,                  // tile base
+                false,              // not main screen
+                true);              // load default font
+    consoleSelect(&g_subConsole);
+
+    // Print immediately so we know the console works
+    printf("\n\n");
+    printf("  *** ScratchDS v" SCRATCHDS_VERSION " ***\n\n");
+    printf("  Console OK\n");
+    printf("  Initialising hardware...\n");
+
+    // ── Step 4: Finish hardware init (OAM, timers, RNG) ────────────────
+    oamInit(&oamMain, SpriteMapping_1D_32, false);
+    oamInit(&oamSub,  SpriteMapping_1D_32, false);
+
+    // Timer 0 for frame timing / FPS measurement
+    timerStart(0, ClockDivider_1024, TIMER_FREQ_1024(60), nullptr);
+    srand(timerElapsed(0) ^ 0xDEAD);
+
+    printf("  Hardware OK\n");
+
+    // ── Step 5: FAT / SD card ───────────────────────────────────────────
+    printf("  Mounting SD card...\n");
     if (!fatInitDefault()) {
-        consoleDemoInit();
-        printf("FAT init failed!\nCheck R4 card & SD.\n");
+        printf("\n  [FAIL] FAT init failed!\n");
+        printf("  Check R4 card and SD.\n");
+        printf("  Press any button to hang.\n");
         while (true) swiWaitForVBlank();
     }
+    printf("  SD card OK\n");
 
-    // Load persisted settings (if present)
+    // ── Step 6: Load persisted settings ────────────────────────────────
     g_settings.load(SETTINGS_PATH);
 
-    // Init subsystems
-    showLoadingScreen("Starting subsystems...", 10);
+    // ── Step 7: Init subsystems ─────────────────────────────────────────
+    printf("  Input...\n");
     InputHandler::getInstance().init();
+
+    printf("  NDS extension...\n");
     NDSExtension::getInstance().init();
+
+    printf("  Audio...\n");
     AudioManager::getInstance().init();
 
-    // Overlay menu
+    // ── Step 8: Overlay menu ────────────────────────────────────────────
     OverlayMenu& menu = OverlayMenu::getInstance();
     menu.init(g_settings);
     menu.setApplyCallback(onSettingsApplied);
     menu.setLoadCallback(onProjectLoad);
 
-    // Ensure directories exist
+    // ── Step 9: Ensure directories exist ───────────────────────────────
     mkdir(PROJECTS_DIR, 0777);
-    mkdir(EXTRACT_DIR, 0777);
+    mkdir(EXTRACT_DIR,  0777);
     mkdir("fat:/scratch/example/", 0777);
     mkdir("fat:/scratch/out/", 0777);
 
-    // Try to select a project
+    // ── Step 10: Find a project ─────────────────────────────────────────
     char projectPath[256] = {0};
-    showLoadingScreen("Searching for projects...", 15);
-
     bool hasProject = false;
 
-    // Check if settings has a last-used project
+    // Last-used project from settings?
     if (g_settings.lastProjectPath[0] != '\0') {
+        printf("  Checking last project...\n");
         FILE* test = fopen(g_settings.lastProjectPath, "rb");
-        if (test) { fclose(test); strncpy(projectPath, g_settings.lastProjectPath, 255); hasProject = true; }
+        if (test) {
+            fclose(test);
+            strncpy(projectPath, g_settings.lastProjectPath, 255);
+            hasProject = true;
+            printf("  Found: %.28s\n", projectPath);
+        } else {
+            printf("  Last project not found.\n");
+            g_settings.lastProjectPath[0] = '\0';
+        }
     }
 
-    // Try the file selector
+    // File selector
     if (!hasProject) {
-        showLoadingScreen("Select a project...", 20);
+        printf("  Scanning fat:/scratch/ ...\n");
+        swiWaitForVBlank(); // let the print render
         hasProject = selectProject(projectPath, 256);
     }
 
     // Fallback to example
     if (!hasProject) {
+        printf("  Trying example.sb3...\n");
         FILE* ex = fopen(EXAMPLE_SB3, "rb");
-        if (ex) { fclose(ex); strncpy(projectPath, EXAMPLE_SB3, 255); hasProject = true; }
+        if (ex) {
+            fclose(ex);
+            strncpy(projectPath, EXAMPLE_SB3, 255);
+            hasProject = true;
+            printf("  Using example.sb3\n");
+        }
     }
 
-    // Still nothing — show a waiting screen
+    // Still nothing
     if (!hasProject) {
-        consoleDemoInit();
-        printf("\n\n  ScratchDS\n\n");
-        printf("  No .sb3 project found.\n\n");
+        printf("\n  No .sb3 file found.\n\n");
         printf("  Place .sb3 files in:\n");
         printf("  fat:/scratch/\n\n");
-        printf("  Hold L+R+B to open menu\n");
-        printf("  and use Load to browse.\n");
-
-        // Wait for L+R+B to open menu (with empty project)
+        printf("  Hold L+R+B to open menu.\n");
+        printf("  (or power off and add files)\n");
         ScratchProject emptyProject;
         mainLoop(emptyProject);
         return 0;
     }
 
-    // Load the project
+    // ── Step 11: Load the project ───────────────────────────────────────
+    printf("\n  Loading project...\n");
+    printf("  %.28s\n", projectPath);
+    swiWaitForVBlank();
+
     ScratchProject project;
     if (!loadProject(projectPath, project)) {
-        consoleDemoInit();
-        printf("Failed to load project:\n%.30s\n", projectPath);
-        printf("\nHold L+R+B to open menu.\n");
+        printf("\n  [FAIL] Could not load project.\n");
+        printf("  %.30s\n", projectPath);
+        printf("\n  Hold L+R+B for menu.\n");
         mainLoop(project);
         return 0;
     }
 
-    strncpy(g_settings.lastProjectPath, projectPath, sizeof(g_settings.lastProjectPath) - 1);
+    strncpy(g_settings.lastProjectPath, projectPath,
+            sizeof(g_settings.lastProjectPath) - 1);
     g_settings.save(SETTINGS_PATH);
 
-    showLoadingScreen("Starting VM...", 90);
+    // ── Step 12: Start VM ───────────────────────────────────────────────
+    printf("  Starting VM...\n");
     ScratchVM& vm = ScratchVM::getInstance();
     vm.init(project);
     vm.greenFlag();
 
-    showLoadingScreen("Running!", 100);
+    printf("  Running! Green flag sent.\n");
+    printf("  Hold L+R+B for menu.\n");
+    swiWaitForVBlank();
+    swiWaitForVBlank();
     swiWaitForVBlank();
 
     mainLoop(project);
@@ -166,61 +229,67 @@ int main() {
 // Load a .sb3 into a ScratchProject (extract + parse + load assets)
 // -----------------------------------------------------------------------
 bool loadProject(const char* sb3Path, ScratchProject& project, bool silent) {
-    if (!silent) showLoadingScreen("Extracting...", 30);
+    consoleSelect(&g_subConsole);
 
-    // Determine extract dir (use hashed subdir to avoid conflicts)
+    if (!silent) {
+        printf("  Extracting ZIP...\n");
+        swiWaitForVBlank();
+    }
+
     char extractDir[256];
     snprintf(extractDir, sizeof(extractDir), "%s", EXTRACT_DIR);
 
     ZipLoader loader;
     if (!loader.extract(sb3Path, extractDir)) {
-        if (!silent) { consoleDemoInit(); printf("Extraction failed:\n%s\n", sb3Path); }
+        if (!silent) printf("  [FAIL] Extraction failed.\n");
         return false;
     }
 
-    if (!silent) showLoadingScreen("Parsing project.json...", 50);
+    if (!silent) {
+        printf("  Parsing project.json...\n");
+        swiWaitForVBlank();
+    }
     if (!project.load(extractDir)) {
-        if (!silent) { consoleDemoInit(); printf("Invalid project.json\n"); }
+        if (!silent) printf("  [FAIL] Bad project.json\n");
         return false;
     }
 
-    if (!silent) showLoadingScreen("Loading costumes...", 65);
+    if (!silent) {
+        printf("  Loading costumes...\n");
+        swiWaitForVBlank();
+    }
     Renderer::getInstance().loadSprites(project);
 
-    if (!silent) showLoadingScreen("Loading sounds...", 80);
+    if (!silent) {
+        printf("  Loading sounds...\n");
+        swiWaitForVBlank();
+    }
     AudioManager::getInstance().loadSounds(project, extractDir);
 
+    if (!silent) printf("  Load OK.\n");
     return true;
 }
 
 // -----------------------------------------------------------------------
-// Hardware initialisation
+// showLoadingScreen — uses the already-initialised g_subConsole.
+// Does NOT call consoleDemoInit() (which would fight with our console).
 // -----------------------------------------------------------------------
-bool initHardware() {
-    powerOn(POWER_ALL);
-
-    videoSetMode(MODE_5_2D);
-    vramSetBankA(VRAM_A_MAIN_BG);
-    vramSetBankB(VRAM_B_MAIN_SPRITE);
-
-    videoSetModeSub(MODE_0_2D);
-    vramSetBankC(VRAM_C_SUB_BG);
-    vramSetBankD(VRAM_D_SUB_SPRITE);
-
-    oamInit(&oamMain, SpriteMapping_1D_32, false);
-    oamInit(&oamSub,  SpriteMapping_1D_32, false);
-
-    // Timer 0: frame timing / FPS measurement
-    timerStart(0, ClockDivider_1024, TIMER_FREQ_1024(60), nullptr);
-
-    // Seed RNG from hardware timer
-    srand(timerElapsed(0));
-
-    return true;
+void showLoadingScreen(const char* message, int progress) {
+    consoleSelect(&g_subConsole);
+    consoleClear();
+    printf("\n\n\n");
+    printf("  *** ScratchDS v" SCRATCHDS_VERSION " ***\n\n");
+    printf("  %s\n\n", message);
+    printf("  [");
+    int filled = progress / 5;
+    for (int i = 0; i < 20; i++) printf("%s", i < filled ? "#" : "-");
+    printf("] %d%%\n", progress);
+    printf("\n  Hold L+R+B for menu\n");
+    swiWaitForVBlank(); // ensure the frame is displayed
 }
 
 // -----------------------------------------------------------------------
-// Project file selector (D-pad UI)
+// Project file selector (D-pad UI on sub screen)
 // -----------------------------------------------------------------------
 bool selectProject(char* pathOut, int maxLen) {
     const int MAX_FILES = 64;
@@ -228,30 +297,30 @@ bool selectProject(char* pathOut, int maxLen) {
     const char* filenamesPtrs[MAX_FILES];
     int count = 0;
 
+    // Scan for .sb3 files
     DIR* dir = opendir(PROJECTS_DIR);
-    if (!dir) dir = opendir("fat:/");
-    if (!dir) return false;
-
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != nullptr && count < MAX_FILES) {
-        size_t len = strlen(entry->d_name);
-        if (len > 4 && strcmp(entry->d_name + len - 4, ".sb3") == 0) {
-            strncpy(filenames[count], entry->d_name, 255);
-            filenamesPtrs[count] = filenames[count];
-            count++;
+    if (dir) {
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != nullptr && count < MAX_FILES) {
+            size_t len = strlen(entry->d_name);
+            if (len > 4 && strcmp(entry->d_name + len - 4, ".sb3") == 0) {
+                strncpy(filenames[count], entry->d_name, 255);
+                filenamesPtrs[count] = filenames[count];
+                count++;
+            }
         }
+        closedir(dir);
     }
-    closedir(dir);
 
     if (count == 0) return false;
+
     if (count == 1) {
         snprintf(pathOut, maxLen, "%s%s", PROJECTS_DIR, filenames[0]);
         return true;
     }
 
+    // Multiple files — show selector
     int selected = 0;
-    consoleDemoInit();
-
     while (true) {
         drawFileSelector(filenamesPtrs, count, selected);
         swiWaitForVBlank();
@@ -263,68 +332,46 @@ bool selectProject(char* pathOut, int maxLen) {
             snprintf(pathOut, maxLen, "%s%s", PROJECTS_DIR, filenames[selected]);
             return true;
         }
-        // Hold L+R+B during selector to skip (menu will handle load)
-        if ((keysHeld() & (KEY_L | KEY_R | KEY_B)) == (KEY_L | KEY_R | KEY_B)) return false;
+        if ((keysHeld() & (KEY_L | KEY_R | KEY_B)) == (KEY_L | KEY_R | KEY_B))
+            return false;
     }
 }
 
 void drawFileSelector(const char** files, int count, int selected) {
+    consoleSelect(&g_subConsole);
     consoleClear();
     printf("\n  ScratchDS - Select Project\n");
     printf("  ==========================\n\n");
-    for (int i = 0; i < count; i++)
+    for (int i = 0; i < count && i < 16; i++)
         printf("  %s %.26s\n", (i == selected) ? ">" : " ", files[i]);
-    printf("\n  [A] Load  [Up/Down] Select\n");
-    printf("  [L+R+B] Skip to Menu\n");
+    printf("\n  [A]=Load  [Up/Down]=Select\n");
+    printf("  [L+R+B]=Skip to Menu\n");
 }
 
 // -----------------------------------------------------------------------
-// Loading screen (sub/bottom screen console)
+// Settings applied callback
 // -----------------------------------------------------------------------
-void showLoadingScreen(const char* message, int progress) {
-    consoleDemoInit();
-    consoleClear();
-    printf("\n\n\n");
-    printf("   *** ScratchDS v" SCRATCHDS_VERSION " ***\n\n");
-    printf("   %s\n\n", message);
-    printf("   [");
-    int filled = progress / 5;
-    for (int i = 0; i < 20; i++) printf("%s", i < filled ? "#" : "-");
-    printf("] %d%%\n", progress);
-    printf("\n   Hold L+R+B for menu\n");
-}
-
-// -----------------------------------------------------------------------
-// Settings applied callback — resets scene or reconfigures video
-// -----------------------------------------------------------------------
-static ScratchProject* g_currentProject = nullptr; // set in mainLoop
+static ScratchProject* g_currentProject = nullptr;
 
 void onSettingsApplied(const ScratchDSSettings& settings) {
-    // Reconfigure frame timing (timer 1 for 30fps mode)
     if (settings.targetFPS == 30) {
         timerStart(1, ClockDivider_1024, TIMER_FREQ_1024(30), nullptr);
     }
 
-    // Screen layout swap
     if (!settings.stageOnTop) {
-        // Move OAM/BG to sub screen, console to main
-        // (Full swap requires re-routing VRAM banks — simplified here)
-        videoSetMode(MODE_0_2D);       // main becomes text console
-        videoSetModeSub(MODE_5_2D);    // sub becomes stage
+        videoSetMode(MODE_0_2D);
+        videoSetModeSub(MODE_5_2D);
         vramSetBankC(VRAM_C_SUB_BG_0x06200000);
         vramSetBankD(VRAM_D_SUB_SPRITE);
     } else {
-        // Restore default layout
         videoSetMode(MODE_5_2D);
         vramSetBankA(VRAM_A_MAIN_BG);
         vramSetBankB(VRAM_B_MAIN_SPRITE);
         videoSetModeSub(MODE_0_2D);
         vramSetBankC(VRAM_C_SUB_BG);
-        vramSetBankD(VRAM_D_SUB_SPRITE);
     }
 
-    // Reset VM and reload project if one is loaded
-    if (g_currentProject && g_currentProject->targets.empty() == false) {
+    if (g_currentProject && !g_currentProject->targets.empty()) {
         ScratchVM::getInstance().stopAll();
         ScratchVM::getInstance().init(*g_currentProject);
         ScratchVM::getInstance().greenFlag();
@@ -333,12 +380,14 @@ void onSettingsApplied(const ScratchDSSettings& settings) {
 
 void onProjectLoad(const char* path) {
     AudioManager::getInstance().stopAll();
-
     if (g_currentProject) {
-        *g_currentProject = ScratchProject(); // reset
-        showLoadingScreen("Loading new project...", 0);
+        *g_currentProject = ScratchProject();
+        consoleSelect(&g_subConsole);
+        consoleClear();
+        printf("  Loading: %.28s\n", path);
         if (loadProject(path, *g_currentProject)) {
-            strncpy(g_settings.lastProjectPath, path, sizeof(g_settings.lastProjectPath) - 1);
+            strncpy(g_settings.lastProjectPath, path,
+                    sizeof(g_settings.lastProjectPath) - 1);
             g_settings.save(SETTINGS_PATH);
             ScratchVM::getInstance().init(*g_currentProject);
             ScratchVM::getInstance().greenFlag();
@@ -347,11 +396,12 @@ void onProjectLoad(const char* path) {
 }
 
 // -----------------------------------------------------------------------
-// FPS overlay (drawn on sub-screen console bottom line)
+// FPS overlay on bottom screen
 // -----------------------------------------------------------------------
 void drawFPSOverlay() {
     if (!g_settings.showFPSCounter) return;
-    printf("\x1b[0;28H" "\x1b[33;1m" "%4.1f" "\x1b[0m", s_currentFPS);
+    consoleSelect(&g_subConsole);
+    printf("\x1b[0;28H\x1b[33;1m%4.1f\x1b[0m", s_currentFPS);
 }
 
 // -----------------------------------------------------------------------
@@ -367,21 +417,19 @@ void mainLoop(ScratchProject& project) {
     NDSExtension& ext   = NDSExtension::getInstance();
     OverlayMenu&  menu  = OverlayMenu::getInstance();
 
-    // Frame timing
+    // Init the top-screen renderer (does NOT touch the sub console)
+    rend.init();
+
     clock_t prevTime = clock();
     float   dt       = 1.0f / 60.0f;
-
-    // Target frame duration in VBlanks
     int vblanksPerFrame = (g_settings.targetFPS >= 60) ? 1 : 2;
 
     while (true) {
-        // 1. Measure dt
         clock_t now = clock();
         dt = (float)(now - prevTime) / CLOCKS_PER_SEC;
         if (dt <= 0.0f || dt > 0.1f) dt = 1.0f / (float)g_settings.targetFPS;
         prevTime = now;
 
-        // 2. Update FPS counter
         s_fpsTimer += dt;
         s_frameCount++;
         if (s_fpsTimer >= 1.0f) {
@@ -390,59 +438,37 @@ void mainLoop(ScratchProject& project) {
             s_fpsTimer    = 0.0f;
         }
 
-        // 3. Read hardware inputs
         input.update();
-
-        // 4. Update NDS extension (combos, touch gestures, clap)
         ext.update(dt);
 
-        // 5. Update overlay menu — if it returns true, VM is paused
         bool paused = menu.update(dt);
 
         if (!paused && !project.targets.empty()) {
-            // 6a. Fire hat blocks from NDS extension triggers
-            //     Button hat blocks
+            // Fire NDS hat blocks
             for (int b = 0; NDSBlocks::BUTTONS[b] != nullptr; b++) {
-                if (ext.shouldFireButtonHat(NDSBlocks::BUTTONS[b])) {
+                if (ext.shouldFireButtonHat(NDSBlocks::BUTTONS[b]))
                     vm.fireKeyPressed(NDSBlocks::BUTTONS[b]);
-                }
             }
-            //     Clap hat
-            if (ext.shouldFireClapHat()) {
-                vm.broadcast("__nds_clap__");
-            }
-            //     Touch tap hat
-            if (ext.shouldFireTouchHat()) {
-                vm.broadcast("__nds_touch__");
-            }
-            //     Combo hats
+            if (ext.shouldFireClapHat())  vm.broadcast("__nds_clap__");
+            if (ext.shouldFireTouchHat()) vm.broadcast("__nds_touch__");
             for (int c = 0; NDSBlocks::COMBOS[c] != nullptr; c++) {
-                if (ext.shouldFireComboHat(NDSBlocks::COMBOS[c])) {
+                if (ext.shouldFireComboHat(NDSBlocks::COMBOS[c]))
                     vm.broadcast(std::string("__nds_combo_") + NDSBlocks::COMBOS[c] + "__");
-                }
             }
 
-            // 6b. Step the VM
             vm.step(dt);
-
-            // 6c. Render stage to top screen
             rend.renderFrame(project);
 
-            // 6d. Render UI (variable monitor, button hints) to bottom screen
+            // UI on bottom screen — re-select our console first
+            consoleSelect(&g_subConsole);
             rend.renderUI(project, input);
-
-            // 6e. FPS overlay
             drawFPSOverlay();
         }
 
-        // 7. Flush OAM
         oamUpdate(&oamMain);
         oamUpdate(&oamSub);
-
-        // 8. Tick audio streaming
         audio.update();
 
-        // 9. VBlank sync
         for (int v = 0; v < vblanksPerFrame; v++) swiWaitForVBlank();
     }
 }
