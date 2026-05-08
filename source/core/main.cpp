@@ -210,8 +210,6 @@ bool initHardware() {
     oamInit(&oamMain, SpriteMapping_1D_32, false);
     oamInit(&oamSub,  SpriteMapping_1D_32, false);
 
-    touchInit();
-
     // Timer 0: frame timing / FPS measurement
     timerStart(0, ClockDivider_1024, TIMER_FREQ_1024(60), nullptr);
 
