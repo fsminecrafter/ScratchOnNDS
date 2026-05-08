@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include "jsmn.h"   // needed for jsmntok_t in private method declarations
 
 // -----------------------------------------------------------------------
 // Asset references (resolved to file paths after extraction)
@@ -222,10 +223,12 @@ struct ScratchSprite {
     std::map<std::string, ScratchVariable> variables;
     std::map<std::string, ScratchList>     lists;
 
+    // Runtime say/think bubble
+    std::string sayMessage;
+
     // Runtime clone state
     bool isClone;
     int  cloneParentIndex;
-
     // OAM state (assigned by renderer)
     int oamId;
 };
@@ -257,4 +260,21 @@ struct ScratchProject {
 private:
     bool parseJson(const char* json, size_t len);
     BlockOpcode opcodeFromStr(const std::string& s);
+
+    // These are defined in project.cpp but were missing from the header
+    void parseTarget(const char* json, jsmntok_t* toks,
+                     int& i, int numToks, ScratchSprite& sprite);
+    void parseCostumes(const char* json, jsmntok_t* toks,
+                       int& i, int numToks, std::vector<ScratchCostume>& out);
+    void parseSounds(const char* json, jsmntok_t* toks,
+                     int& i, int numToks, std::vector<ScratchSound>& out);
+    void parseBlocks(const char* json, jsmntok_t* toks,
+                     int& i, int numToks, std::map<std::string, ScratchBlock>& out);
+    void parseBlockInputs(const char* json, jsmntok_t* toks,
+                          int& i, int numToks, std::map<std::string, ScratchInput>& out);
+    void parseBlockFields(const char* json, jsmntok_t* toks,
+                          int& i, int numToks, std::map<std::string, std::string>& out);
+    void parseVariables(const char* json, jsmntok_t* toks,
+                        int& i, int numToks, std::map<std::string, ScratchVariable>& out);
+    void skipValue(jsmntok_t* toks, int& i, int numToks);
 };
