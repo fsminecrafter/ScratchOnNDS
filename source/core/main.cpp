@@ -65,7 +65,16 @@ void drawFPSOverlay();
 // -----------------------------------------------------------------------
 int main() {
     // ── Step 1: Power on everything ────────────────────────────────────
+    // Hard reset video state left over from R4 launcher
     powerOn(POWER_ALL);
+    
+    // Reset both video engines to known state
+    videoSetMode(0);       // blank main screen
+    videoSetModeSub(0);    // blank sub screen
+    
+    // Wait a frame for the reset to take effect
+    swiWaitForVBlank();
+    swiWaitForVBlank();
 
     // ── Step 2: Set video modes so consoles have somewhere to render ───
     // Top screen  (main engine A) → stage / sprites later
