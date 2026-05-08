@@ -31,8 +31,9 @@
 // fatInitDefault() mounts the card as "fat:/".
 #define PROJECTS_DIR    "fat:/scratch/"
 #define EXTRACT_DIR     "fat:/scratch/.tmp/"
-#define EXAMPLE_SB3     "fat:/scratch/example/example.sb3"
-#define EXAMPLE_EXTRACT "fat:/scratch/.tmp/example/"
+#define EXAMPLE_SB3       "fat:/scratch/example/example.sb3"
+#define EXAMPLE_SB3_FLAT  "fat:/scratch/example.sb3"
+#define EXAMPLE_EXTRACT   "fat:/scratch/.tmp/example/"
 #define SETTINGS_PATH   "fat:/scratch/.settings"
 
 // FPS tracking
@@ -178,13 +179,14 @@ int main() {
 
     // Fallback to example
     if (!hasProject) {
-        printf("  Trying example.sb3...\n");
-        FILE* ex = fopen(EXAMPLE_SB3, "rb");
-        if (ex) {
-            fclose(ex);
-            strncpy(projectPath, EXAMPLE_SB3, 255);
-            hasProject = true;
-            printf("  Using example.sb3\n");
+        const char* exPaths[] = { EXAMPLE_SB3, EXAMPLE_SB3_FLAT, nullptr };
+        for (int i = 0; exPaths[i] && !hasProject; i++) {
+            FILE* ex = fopen(exPaths[i], "rb");
+            if (ex) {
+                fclose(ex);
+                strncpy(projectPath, exPaths[i], 255);
+                hasProject = true;
+            }
         }
     }
 
