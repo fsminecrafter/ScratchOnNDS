@@ -7,6 +7,8 @@
 #include "core/project.h"
 #include <cstring>
 #include <cstdio>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
