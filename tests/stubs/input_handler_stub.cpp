@@ -1,26 +1,38 @@
 // tests/stubs/input_handler_stub.cpp
 
-#include <cstdint>
+#include <string>
 
-extern "C" {
+class InputHandler {
+public:
+    static int getTouchX() {
+        return 0;
+    }
 
-bool input_is_key_pressed(int) {
-    return false;
-}
+    static int getTouchY() {
+        return 0;
+    }
 
-bool input_is_key_held(int) {
-    return false;
-}
+    static bool isTouching() {
+        return false;
+    }
 
-int input_get_touch_x() {
-    return 0;
-}
+    static int getMicLoudness() {
+        return 0;
+    }
 
-int input_get_touch_y() {
-    return 0;
-}
+    static bool isKeyDown(const std::string&) {
+        return false;
+    }
 
-void input_update() {
-}
+    static bool isButtonDown(const std::string&) {
+        return false;
+    }
 
-}
+    static bool isButtonHeld(const std::string&) {
+        return false;
+    }
+
+    static bool isButtonReleased(const std::string&) {
+        return false;
+    }
+};
