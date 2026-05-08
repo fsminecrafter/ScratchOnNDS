@@ -1,21 +1,5 @@
 // =============================================================================
 // nds_extension.h — ScratchDS NDS Hardware Extension Plugin
-// Provides custom Scratch blocks for NDS-specific input, output, and sensors.
-//
-// Block categories added:
-//   [NDS Input]      — Button pressed/held/released, D-pad, combo detection
-//   [NDS Touch]      — Touchscreen position, drag, tap detection
-//   [NDS Microphone] — Loudness, clap detection, recording state
-//   [NDS Triggers]   — Hat blocks: "when button pressed", "when clap detected"
-//   [NDS System]     — Backlight, rumble, battery level placeholder
-//
-// Usage:
-//   Call NDSExtension::registerBlocks() once at startup.
-//   The VM's opcodeFromStr() and executeBlock() dispatch to this module
-//   via the NDS_* opcodes defined in project.h.
-//
-// Scratch Extension Block Definitions (for a companion .js editor plugin):
-//   See nds_extension_blocks.js for the Scratch 3.0 editor integration.
 // =============================================================================
 #pragma once
 
@@ -26,39 +10,13 @@
 #include <vector>
 
 // -----------------------------------------------------------------------
-// Extended NDS-specific opcodes (supplement BlockOpcode in project.h)
-// These are handled by NDSExtension::execute()
-// -----------------------------------------------------------------------
-// Triggers (hat blocks)
-//   NDS_WHENBUTTONPRESSED      — fires when a specific button is pressed
-//   NDS_WHENCLAP               — fires when mic loudness crosses threshold
-//   NDS_WHENTOUCHED            — fires when touchscreen is tapped
-//   NDS_WHENCOMBO              — fires when a button combo is held
-// Boolean/reporter blocks
-//   NDS_BUTTONPRESSED          — (already in project.h) instant press
-//   NDS_BUTTONHELD             — held this frame
-//   NDS_BUTTONRELEASED         — released this frame
-//   NDS_COMBO_HELD             — all buttons in a combo held simultaneously
-//   NDS_TOUCHX / NDS_TOUCHY   — (already in project.h)
-//   NDS_TOUCHPRESSED           — (already in project.h)
-//   NDS_TOUCH_DELTAX/Y         — swipe/drag delta per frame
-//   NDS_MICROPHONE_LOUDNESS    — (already in project.h)
-//   NDS_CLAP_DETECTED          — true if loudness spike crossed threshold
-//   NDS_MIC_RECORDING          — whether mic is active
-//   NDS_BATTERY_LEVEL          — 0-100 placeholder (NDS has no real API)
-//   NDS_BACKLIGHT_TOP          — (already in project.h) set top backlight
-//   NDS_BACKLIGHT_BOTTOM       — set bottom backlight
-//   NDS_RUMBLE                 — (already in project.h) pulse rumble
-//   NDS_SETVIBRATION           — set rumble on/off
-
-// -----------------------------------------------------------------------
 // Clap / loudness spike detector
 // -----------------------------------------------------------------------
 struct ClapDetector {
     static constexpr int   HISTORY_LEN       = 8;
-    static constexpr int   CLAP_THRESHOLD     = 60;   // loudness units (0-100)
-    static constexpr int   CLAP_QUIET_THRESH  = 20;   // must be quiet before a clap
-    static constexpr float CLAP_COOLDOWN_SECS = 0.3f; // minimum gap between claps
+    static constexpr int   CLAP_THRESHOLD     = 60;
+    static constexpr int   CLAP_QUIET_THRESH  = 20;
+    static constexpr float CLAP_COOLDOWN_SECS = 0.3f;
 
     int   history[HISTORY_LEN];
     int   histIdx;
@@ -70,7 +28,6 @@ struct ClapDetector {
         for (int i = 0; i < HISTORY_LEN; i++) history[i] = 0;
     }
 
-    // Call each frame with current loudness and dt
     void update(int loudness, float dt) {
         clapThisFrame = false;
         history[histIdx % HISTORY_LEN] = loudness;
@@ -95,8 +52,8 @@ struct ClapDetector {
 // -----------------------------------------------------------------------
 struct ComboTracker {
     struct Combo {
-        std::string name;     // e.g. "L+R", "A+B", "L+R+B"
-        u32         mask;     // OR of KEY_ masks
+        std::string name;
+        u32         mask;
         bool        heldNow;
         bool        justPressed;
     };
@@ -140,7 +97,7 @@ struct TouchTracker {
     bool tapThisFrame;
     float tapTimer;
 
-    static constexpr float TAP_MAX_DURATION = 0.25f; // seconds
+    static constexpr float TAP_MAX_DURATION = 0.25f;
 
     TouchTracker() : lastX(0), lastY(0), deltaX(0), deltaY(0),
                      wasTouching(false), tapThisFrame(false), tapTimer(0) {}
@@ -178,13 +135,9 @@ public:
         return inst;
     }
 
-    // Called once at startup after hardware init
     void init();
-
-    // Called every frame before VM step
     void update(float dt);
 
-    // Query methods (called by VM executeBlock for NDS_* opcodes)
     bool  isButtonPressed(const std::string& btn) const;
     bool  isButtonHeld(const std::string& btn) const;
     bool  isButtonReleased(const std::string& btn) const;
@@ -202,21 +155,17 @@ public:
     bool  isClapDetected() const;
     bool  isMicRecording() const;
 
-    // Hat block polling: called by VM to check if a hat should fire this frame
     bool  shouldFireButtonHat(const std::string& btn) const;
     bool  shouldFireClapHat() const;
     bool  shouldFireTouchHat() const;
     bool  shouldFireComboHat(const std::string& combo) const;
 
-    // Backlight control
     void  setTopBacklight(bool on);
     void  setBottomBacklight(bool on);
 
-    // Rumble (GBA slot-2 rumble pak)
     void  setRumble(bool on);
     void  pulseRumble(float durationSecs);
 
-    // Check if the overlay menu combo (L+R+B) just triggered
     bool  menuComboJustPressed() const;
 
 private:
@@ -233,51 +182,47 @@ private:
 };
 
 // -----------------------------------------------------------------------
-// Scratch block definitions for the companion JS editor extension.
-// These strings are also used to validate opcode names at parse time.
+// Scratch block opcode name constants for the NDS extension.
+//
+// Declared as extern const char* in the header and defined once in
+// nds_extension.cpp.  This avoids "defined but not used" warnings that
+// arise when static const char* members are defined inline in a header
+// included by many translation units.
+//
+// Only BUTTONS[] and COMBOS[] are used at runtime (in main.cpp's loop);
+// the individual string constants are provided for reference / JS plugin.
 // -----------------------------------------------------------------------
 namespace NDSBlocks {
     // Hat blocks (triggers)
-    static const char* WHEN_BUTTON_PRESSED    = "nds_whenbuttonpressed";
-    static const char* WHEN_CLAP              = "nds_whenclap";
-    static const char* WHEN_TOUCHED           = "nds_whentouched";
-    static const char* WHEN_COMBO             = "nds_whencombo";
+    extern const char* WHEN_BUTTON_PRESSED;
+    extern const char* WHEN_CLAP;
+    extern const char* WHEN_TOUCHED;
+    extern const char* WHEN_COMBO;
 
     // Boolean reporters
-    static const char* BUTTON_PRESSED         = "nds_buttonpressed";
-    static const char* BUTTON_HELD            = "nds_buttonheld";
-    static const char* BUTTON_RELEASED        = "nds_buttonreleased";
-    static const char* COMBO_HELD             = "nds_combo_held";
-    static const char* TOUCH_PRESSED          = "nds_touchpressed";
-    static const char* CLAP_DETECTED          = "nds_clap_detected";
-    static const char* MIC_RECORDING          = "nds_mic_recording";
+    extern const char* BUTTON_PRESSED;
+    extern const char* BUTTON_HELD;
+    extern const char* BUTTON_RELEASED;
+    extern const char* COMBO_HELD;
+    extern const char* TOUCH_PRESSED;
+    extern const char* CLAP_DETECTED;
+    extern const char* MIC_RECORDING;
 
     // Numeric reporters
-    static const char* TOUCH_X                = "nds_touchx";
-    static const char* TOUCH_Y                = "nds_touchy";
-    static const char* TOUCH_DELTA_X          = "nds_touch_deltax";
-    static const char* TOUCH_DELTA_Y          = "nds_touch_deltay";
-    static const char* MICROPHONE_LOUDNESS    = "nds_microphone_loudness";
-    static const char* BATTERY_LEVEL          = "nds_battery_level";
+    extern const char* TOUCH_X;
+    extern const char* TOUCH_Y;
+    extern const char* TOUCH_DELTA_X;
+    extern const char* TOUCH_DELTA_Y;
+    extern const char* MICROPHONE_LOUDNESS;
+    extern const char* BATTERY_LEVEL;
 
-    // Command blocks (actions)
-    static const char* SET_TOP_BACKLIGHT      = "nds_backlight_top";
-    static const char* SET_BOTTOM_BACKLIGHT   = "nds_backlight_bottom";
-    static const char* RUMBLE                 = "nds_rumble";
-    static const char* SET_VIBRATION          = "nds_setvibration";
+    // Command blocks
+    extern const char* SET_TOP_BACKLIGHT;
+    extern const char* SET_BOTTOM_BACKLIGHT;
+    extern const char* RUMBLE;
+    extern const char* SET_VIBRATION;
 
-    // Button name constants (field values)
-    static const char* BUTTONS[] = {
-        "A", "B", "X", "Y", "L", "R",
-        "start", "select",
-        "up", "down", "left", "right",
-        nullptr
-    };
-
-    // Combo name constants
-    static const char* COMBOS[] = {
-        "L+R", "A+B", "L+R+B", "L+A", "R+A",
-        "up+A", "down+A", "left+A", "right+A",
-        nullptr
-    };
-}
+    // Null-terminated button/combo name arrays used by main.cpp's hat loop
+    extern const char* const BUTTONS[];
+    extern const char* const COMBOS[];
+} // namespace NDSBlocks
