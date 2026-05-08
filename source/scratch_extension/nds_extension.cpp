@@ -7,13 +7,58 @@
 #include <stdlib.h>
 
 // -----------------------------------------------------------------------
+// NDSBlocks constant definitions
+// Defined here (one TU) to avoid "defined but not used" ODR warnings
+// that occur when static const char* are placed in a header.
+// -----------------------------------------------------------------------
+namespace NDSBlocks {
+    const char* WHEN_BUTTON_PRESSED  = "nds_whenbuttonpressed";
+    const char* WHEN_CLAP            = "nds_whenclap";
+    const char* WHEN_TOUCHED         = "nds_whentouched";
+    const char* WHEN_COMBO           = "nds_whencombo";
+
+    const char* BUTTON_PRESSED       = "nds_buttonpressed";
+    const char* BUTTON_HELD          = "nds_buttonheld";
+    const char* BUTTON_RELEASED      = "nds_buttonreleased";
+    const char* COMBO_HELD           = "nds_combo_held";
+    const char* TOUCH_PRESSED        = "nds_touchpressed";
+    const char* CLAP_DETECTED        = "nds_clap_detected";
+    const char* MIC_RECORDING        = "nds_mic_recording";
+
+    const char* TOUCH_X              = "nds_touchx";
+    const char* TOUCH_Y              = "nds_touchy";
+    const char* TOUCH_DELTA_X        = "nds_touch_deltax";
+    const char* TOUCH_DELTA_Y        = "nds_touch_deltay";
+    const char* MICROPHONE_LOUDNESS  = "nds_microphone_loudness";
+    const char* BATTERY_LEVEL        = "nds_battery_level";
+
+    const char* SET_TOP_BACKLIGHT    = "nds_backlight_top";
+    const char* SET_BOTTOM_BACKLIGHT = "nds_backlight_bottom";
+    const char* RUMBLE               = "nds_rumble";
+    const char* SET_VIBRATION        = "nds_setvibration";
+
+    // Null-terminated arrays used at runtime by main.cpp
+    const char* const BUTTONS[] = {
+        "A", "B", "X", "Y", "L", "R",
+        "start", "select",
+        "up", "down", "left", "right",
+        nullptr
+    };
+
+    const char* const COMBOS[] = {
+        "L+R", "A+B", "L+R+B", "L+A", "R+A",
+        "up+A", "down+A", "left+A", "right+A",
+        nullptr
+    };
+} // namespace NDSBlocks
+
+// -----------------------------------------------------------------------
 // Init — register all combos, start mic
 // -----------------------------------------------------------------------
 void NDSExtension::init() {
     rumbleActive = false;
     rumbleTimer  = 0.0f;
 
-    // Register all supported button combos
     combos.registerCombo("L+R",     KEY_L | KEY_R);
     combos.registerCombo("A+B",     KEY_A | KEY_B);
     combos.registerCombo("L+R+B",   KEY_L | KEY_R | KEY_B);
@@ -26,29 +71,32 @@ void NDSExtension::init() {
 }
 
 // -----------------------------------------------------------------------
-// Update — call every frame before VM step
+// Update — call every frame before VM step.
+// NOTE: scanKeys() is NOT called here.  main.cpp's mainLoop() calls
+// InputHandler::update() which calls scanKeys() exactly once per frame
+// before NDSExtension::update() is invoked.  Calling scanKeys() again
+// here would clear the just-pressed/released edge state that the VM
+// needs to read.
 // -----------------------------------------------------------------------
 void NDSExtension::update(float dt) {
     InputHandler& input = InputHandler::getInstance();
 
-    // Update combo tracker with current held keys
+    // keysHeld() returns the mask from the most recent scanKeys() call
+    // (performed by InputHandler::update() earlier this frame).
     combos.update(keysHeld());
 
-    // Update touch gesture tracker
     bool touching = input.isTouching();
     touch.update(touching,
                  input.getTouchX(),
                  input.getTouchY(),
                  dt);
 
-    // Update clap detector with mic loudness
     int loudness = 0;
     if (input.isMicActive()) {
         loudness = input.getMicLoudness();
     }
     clap.update(loudness, dt);
 
-    // Update rumble pulse timer
     updateRumble(dt);
 }
 
@@ -91,11 +139,11 @@ int  NDSExtension::getTouchDeltaY() const  { return touch.deltaY; }
 // -----------------------------------------------------------------------
 // Microphone queries
 // -----------------------------------------------------------------------
-int  NDSExtension::getMicLoudness() const  {
+int  NDSExtension::getMicLoudness() const {
     return InputHandler::getInstance().getMicLoudness();
 }
-bool NDSExtension::isClapDetected() const  { return clap.detected(); }
-bool NDSExtension::isMicRecording() const  {
+bool NDSExtension::isClapDetected() const { return clap.detected(); }
+bool NDSExtension::isMicRecording() const {
     return InputHandler::getInstance().isMicActive();
 }
 
@@ -103,7 +151,7 @@ bool NDSExtension::isMicRecording() const  {
 // Hat block firing conditions
 // -----------------------------------------------------------------------
 bool NDSExtension::shouldFireButtonHat(const std::string& btn) const {
-    return isButtonPressed(btn); // fires on press edge, not hold
+    return isButtonPressed(btn);
 }
 bool NDSExtension::shouldFireClapHat() const  { return isClapDetected(); }
 bool NDSExtension::shouldFireTouchHat() const { return isTapped(); }
@@ -112,28 +160,25 @@ bool NDSExtension::shouldFireComboHat(const std::string& combo) const {
 }
 
 // -----------------------------------------------------------------------
-// Backlight control (libnds API)
+// Backlight control
 // -----------------------------------------------------------------------
 void NDSExtension::setTopBacklight(bool on) {
     if (on) powerOn(POWER_LCD | POWER_2D_A);
     else    powerOff(POWER_LCD);
 }
 void NDSExtension::setBottomBacklight(bool on) {
-    // The NDS sub-screen (bottom) is controlled via the same LCD power bit.
-    // Individual backlight dimming requires BIOS calls not in libnds.
-    // Best approximation: toggle the sub-BG master brightness.
-    REG_MASTER_BRIGHT_SUB = on ? 0 : (1 << 14) | 16; // max dark
+    REG_MASTER_BRIGHT_SUB = on ? 0 : (1 << 14) | 16;
 }
 
 // -----------------------------------------------------------------------
 // Rumble pak (GBA Slot-2 rumble device)
-// Toggling GBA bus address 0x08000000 bit 3 controls most rumble paks.
 // -----------------------------------------------------------------------
 void NDSExtension::setRumble(bool on) {
 #ifdef ARM9
-    // Standard slot-2 rumble pak protocol
     *(vu16*)0x08000000 = on ? 0x0002 : 0x0000;
     rumbleActive = on;
+#else
+    (void)on;
 #endif
 }
 void NDSExtension::pulseRumble(float durationSecs) {
