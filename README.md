@@ -1,4 +1,8 @@
-# Example Project
+# ScratchOnNDS
+
+A project to bring Scratch onto your NDS for some reason.
+
+## Example Project
 
 Place your example Scratch project here as `example.sb3`.
 
