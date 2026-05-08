@@ -43,7 +43,7 @@ DEVKITARM_VER := unknown
 endif
 
 # Build timestamp
-BUILD_DATE := $(shell date "+%Y-%m-%d %H:%M")
+BUILD_DATE := $(shell date "+%Y-%m-%dT%H:%M")
 
 #-------------------------------------------------------------------------------
 ARCH        := -mthumb -mthumb-interwork
