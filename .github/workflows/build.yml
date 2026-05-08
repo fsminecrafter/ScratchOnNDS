@@ -20,25 +20,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install nds-dev
+        run: |
+          dkp-pacman -Sy --noconfirm
+          dkp-pacman -S --noconfirm nds-dev
+
       - name: Set devkitPro environment
         run: |
-          echo "DEVKITPRO=/opt/devkitpro" >> $GITHUB_ENV
-          echo "DEVKITARM=/opt/devkitpro/devkitARM" >> $GITHUB_ENV
-          echo "/opt/devkitpro/devkitARM/bin" >> $GITHUB_PATH
-          echo "/opt/devkitpro/tools/bin"     >> $GITHUB_PATH
+          echo "DEVKITPRO=/opt/devkitpro"            >> $GITHUB_ENV
+          echo "DEVKITARM=/opt/devkitpro/devkitARM"   >> $GITHUB_ENV
+          echo "/opt/devkitpro/devkitARM/bin"         >> $GITHUB_PATH
+          echo "/opt/devkitpro/tools/bin"              >> $GITHUB_PATH
 
-      - name: Show toolchain versions
-        run: |
-          arm-none-eabi-gcc --version
-          make --version
+      - name: Verify libnds
+        run: ls /opt/devkitpro/libnds/
 
       - name: Build
         run: make -j$(nproc)
 
       - name: Verify output
-        run: |
-          ls -lh ScratchDS.nds
-          echo "Build succeeded: $(du -sh ScratchDS.nds | cut -f1)"
+        run: ls -lh ScratchDS.nds
 
       - name: Upload NDS ROM artifact
         uses: actions/upload-artifact@v4
@@ -48,8 +49,7 @@ jobs:
           retention-days: 30
 
   # ─────────────────────────────────────────────────
-  # Job 2: Host-side unit tests (no NDS hardware needed)
-  # Tests pure logic: VM, project parser, value types
+  # Job 2: Host-side unit tests
   # ─────────────────────────────────────────────────
   unit-tests:
     name: Host Unit Tests
@@ -60,9 +60,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build tools
-        run: sudo apt-get install -y build-essential cmake
+        run: sudo apt-get install -y build-essential cmake git
 
-      - name: Configure (host build)
+      - name: Configure
         run: |
           cmake -B build-host \
             -DCMAKE_BUILD_TYPE=Debug \
@@ -72,9 +72,7 @@ jobs:
         run: cmake --build build-host -j$(nproc)
 
       - name: Run tests
-        run: |
-          cd build-host
-          ctest --output-on-failure -V
+        run: cd build-host && ctest --output-on-failure -V
 
       - name: Upload test results
         if: always()
@@ -106,7 +104,7 @@ jobs:
         run: python3 tools/check_project_json.py assets/example/example.sb3
 
   # ─────────────────────────────────────────────────
-  # Job 4: Release — only on version tags
+  # Job 4: Release
   # ─────────────────────────────────────────────────
   release:
     name: Create Release
@@ -120,12 +118,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install nds-dev
+        run: |
+          dkp-pacman -Sy --noconfirm
+          dkp-pacman -S --noconfirm nds-dev
+
       - name: Set devkitPro environment
         run: |
-          echo "DEVKITPRO=/opt/devkitpro" >> $GITHUB_ENV
-          echo "DEVKITARM=/opt/devkitpro/devkitARM" >> $GITHUB_ENV
-          echo "/opt/devkitpro/devkitARM/bin" >> $GITHUB_PATH
-          echo "/opt/devkitpro/tools/bin"     >> $GITHUB_PATH
+          echo "DEVKITPRO=/opt/devkitpro"            >> $GITHUB_ENV
+          echo "DEVKITARM=/opt/devkitpro/devkitARM"   >> $GITHUB_ENV
+          echo "/opt/devkitpro/devkitARM/bin"         >> $GITHUB_PATH
+          echo "/opt/devkitpro/tools/bin"              >> $GITHUB_PATH
 
       - name: Build release ROM
         run: make -j$(nproc)
@@ -137,8 +140,7 @@ jobs:
           cp ScratchDS.nds release/
           cp -r assets/example release/
           cp README.md release/
-          cd release
-          zip -r ../ScratchDS-${VERSION}.zip .
+          cd release && zip -r ../ScratchDS-${VERSION}.zip .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
