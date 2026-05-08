@@ -1,0 +1,147 @@
+name: Build ScratchDS
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # ─────────────────────────────────────────────────
+  # Job 1: Build the NDS ROM
+  # ─────────────────────────────────────────────────
+  build-nds:
+    name: Build NDS ROM
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitarm:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set devkitPro environment
+        run: |
+          echo "DEVKITPRO=/opt/devkitpro" >> $GITHUB_ENV
+          echo "DEVKITARM=/opt/devkitpro/devkitARM" >> $GITHUB_ENV
+          echo "/opt/devkitpro/devkitARM/bin" >> $GITHUB_PATH
+          echo "/opt/devkitpro/tools/bin"     >> $GITHUB_PATH
+
+      - name: Show toolchain versions
+        run: |
+          arm-none-eabi-gcc --version
+          make --version
+
+      - name: Build
+        run: make -j$(nproc)
+
+      - name: Verify output
+        run: |
+          ls -lh ScratchDS.nds
+          echo "Build succeeded: $(du -sh ScratchDS.nds | cut -f1)"
+
+      - name: Upload NDS ROM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScratchDS-${{ github.sha }}
+          path: ScratchDS.nds
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────
+  # Job 2: Host-side unit tests (no NDS hardware needed)
+  # Tests pure logic: VM, project parser, value types
+  # ─────────────────────────────────────────────────
+  unit-tests:
+    name: Host Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get install -y build-essential cmake
+
+      - name: Configure (host build)
+        run: |
+          cmake -B build-host \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DSCRATCHDS_HOST_TESTS=ON
+
+      - name: Build tests
+        run: cmake --build build-host -j$(nproc)
+
+      - name: Run tests
+        run: |
+          cd build-host
+          ctest --output-on-failure -V
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.sha }}
+          path: build-host/Testing/
+
+  # ─────────────────────────────────────────────────
+  # Job 3: Validate project assets
+  # ─────────────────────────────────────────────────
+  validate-assets:
+    name: Validate Assets
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate example.sb3
+        run: python3 tools/validate_sb3.py assets/example/example.sb3
+
+      - name: Check project.json schema
+        run: python3 tools/check_project_json.py assets/example/example.sb3
+
+  # ─────────────────────────────────────────────────
+  # Job 4: Release — only on version tags
+  # ─────────────────────────────────────────────────
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build-nds, unit-tests]
+    if: startsWith(github.ref, 'refs/tags/v')
+    container:
+      image: devkitpro/devkitarm:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set devkitPro environment
+        run: |
+          echo "DEVKITPRO=/opt/devkitpro" >> $GITHUB_ENV
+          echo "DEVKITARM=/opt/devkitpro/devkitARM" >> $GITHUB_ENV
+          echo "/opt/devkitpro/devkitARM/bin" >> $GITHUB_PATH
+          echo "/opt/devkitpro/tools/bin"     >> $GITHUB_PATH
+
+      - name: Build release ROM
+        run: make -j$(nproc)
+
+      - name: Package release
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          mkdir -p release
+          cp ScratchDS.nds release/
+          cp -r assets/example release/
+          cp README.md release/
+          cd release
+          zip -r ../ScratchDS-${VERSION}.zip .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ScratchDS-*.zip
+          generate_release_notes: true
