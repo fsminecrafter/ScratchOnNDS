@@ -3,9 +3,6 @@ project(ScratchDS_Tests CXX)
 
 set(CMAKE_CXX_STANDARD 14)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Option: enable host tests (OFF by default; ON in CI)
-# ─────────────────────────────────────────────────────────────────────────────
 option(SCRATCHDS_HOST_TESTS "Build host-side unit tests" OFF)
 
 if(NOT SCRATCHDS_HOST_TESTS)
@@ -16,9 +13,10 @@ endif()
 enable_testing()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Fetch doctest (single-header test framework, no NDS dependency)
+# Fetch dependencies
 # ─────────────────────────────────────────────────────────────────────────────
 include(FetchContent)
+
 FetchContent_Declare(
   doctest
   GIT_REPOSITORY https://github.com/doctest/doctest.git
@@ -26,44 +24,56 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(doctest)
 
+FetchContent_Declare(
+  jsmn
+  GIT_REPOSITORY https://github.com/zserge/jsmn.git
+  GIT_TAG        v1.1.0
+)
+FetchContent_MakeAvailable(jsmn)
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Stub include directory: provides fake <nds.h> and friends so that
-# source files that include them can still compile on a host Linux build.
+# Directories
 # ─────────────────────────────────────────────────────────────────────────────
 set(STUB_DIR ${CMAKE_SOURCE_DIR}/tests/stubs)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sources under test (only the portable logic files)
+# Core sources + host stubs for hardware singletons vm.cpp links against
 # ─────────────────────────────────────────────────────────────────────────────
 set(CORE_SOURCES
   source/core/project.cpp
   source/core/vm.cpp
+  tests/stubs/audio_manager_stub.cpp
+  tests/stubs/input_handler_stub.cpp
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper library compiled from core sources with NDS stubs
-# ─────────────────────────────────────────────────────────────────────────────
 add_library(scratchds_core_host STATIC ${CORE_SOURCES})
+
 target_include_directories(scratchds_core_host PUBLIC
-  source
   ${STUB_DIR}
+  source
+  ${jsmn_SOURCE_DIR}
 )
+
 target_compile_definitions(scratchds_core_host PUBLIC
-  SCRATCHDS_HOST_BUILD   # lets source files skip hardware-only sections
+  SCRATCHDS_HOST_BUILD
   SCRATCHDS_VERSION="test"
+  JSMN_STATIC
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test executables
+# Test helper
 # ─────────────────────────────────────────────────────────────────────────────
 function(add_scratchds_test name src)
   add_executable(${name} ${src})
   target_link_libraries(${name} PRIVATE scratchds_core_host doctest::doctest)
-  target_include_directories(${name} PRIVATE ${STUB_DIR} source)
-  target_compile_definitions(${name} PRIVATE SCRATCHDS_HOST_BUILD)
+  target_include_directories(${name} PRIVATE ${STUB_DIR} source ${jsmn_SOURCE_DIR})
+  target_compile_definitions(${name} PRIVATE SCRATCHDS_HOST_BUILD JSMN_STATIC)
   add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests
+# ─────────────────────────────────────────────────────────────────────────────
 add_scratchds_test(test_scratch_value   tests/unit/test_scratch_value.cpp)
 add_scratchds_test(test_project_parser  tests/unit/test_project_parser.cpp)
 add_scratchds_test(test_vm_execution    tests/unit/test_vm_execution.cpp)
