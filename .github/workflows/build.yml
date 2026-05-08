@@ -20,11 +20,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install devkitPro
+      - name: Setup devkitPro
         run: |
-          wget https://apt.devkitpro.org/install-devkitpro-pacman
-          chmod +x install-devkitpro-pacman
-          sudo ./install-devkitpro-pacman
+          sudo apt-get update
+          sudo apt-get install -y gnupg wget ca-certificates
+      
+          wget -O- https://apt.devkitpro.org/devkitpro-keyring.gpg | \
+            sudo gpg --dearmor -o /usr/share/keyrings/devkitpro.gpg
+      
+          echo "deb [signed-by=/usr/share/keyrings/devkitpro.gpg] https://apt.devkitpro.org stable main" | \
+            sudo tee /etc/apt/sources.list.d/devkitpro.list
+      
+          sudo apt-get update
+          sudo apt-get install -y nds-dev
       
       - name: Install NDS tools
         run: |
