@@ -312,9 +312,9 @@ void onSettingsApplied(const ScratchDSSettings& settings) {
         videoSetMode(MODE_0_2D);       // main becomes text console
         videoSetModeSub(MODE_5_2D);    // sub becomes stage
         vramSetBankA(VRAM_A_SUB_BG_0x06200000);
-        vramSetBankB(VRAM_B_SUB_SPRITE);
-        vramSetBankC(VRAM_C_MAIN_BG);
-        vramSetBankD(VRAM_D_MAIN_SPRITE);
+        vramSetBankI(VRAM_I_SUB_SPRITE);
+        vramSetBankC(VRAM_C_SUB_BG_0x06200000);
+        vramSetBankG(VRAM_G_MAIN_SPRITE);
     } else {
         // Restore default layout
         videoSetMode(MODE_5_2D);
