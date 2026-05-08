@@ -5,6 +5,7 @@
 // =============================================================================
 
 #include <nds.h>
+#include <nds/arm9/console.h>
 #include <fat.h>
 #include <stdio.h>
 #include <stdlib.h>
