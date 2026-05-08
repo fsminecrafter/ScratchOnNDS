@@ -16,11 +16,34 @@ include $(DEVKITPRO)/libnds/ds_rules
 #-------------------------------------------------------------------------------
 TARGET      := ScratchDS
 BUILD       := build
-SOURCES     := source source/core source/graphics source/audio source/input
+SOURCES     := source \
+               source/core \
+               source/graphics \
+               source/audio \
+               source/input \
+               source/scratch_extension \
+               source/ui
 INCLUDES    := source
 DATA        :=
 GRAPHICS    :=
 AUDIO       :=
+
+#-------------------------------------------------------------------------------
+# Version info — embed in binary via preprocessor defines
+#-------------------------------------------------------------------------------
+VERSION_MAJOR := 1
+VERSION_MINOR := 0
+VERSION_PATCH := 0
+SCRATCHDS_VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_PATCH)
+
+# Detect devkitARM version if possible
+DEVKITARM_VER := $(shell arm-none-eabi-gcc --version 2>/dev/null | head -1 | cut -d' ' -f3)
+ifeq ($(strip $(DEVKITARM_VER)),)
+DEVKITARM_VER := unknown
+endif
+
+# Build timestamp
+BUILD_DATE := $(shell date "+%Y-%m-%d %H:%M")
 
 #-------------------------------------------------------------------------------
 ARCH        := -mthumb -mthumb-interwork
@@ -29,7 +52,10 @@ CFLAGS      := -g -Wall -O2 -fomit-frame-pointer \
                -ffast-math \
                $(ARCH) \
                $(INCLUDE) \
-               -DARM9
+               -DARM9 \
+               -DSCRATCHDS_VERSION=\"$(SCRATCHDS_VERSION)\" \
+               -DSCRATCHDS_BUILD_DATE=\"$(BUILD_DATE)\" \
+               -DDEVKITARM_VERSION=\"$(DEVKITARM_VER)\"
 
 CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions -std=c++14
 
@@ -64,9 +90,13 @@ export LIBPATHS :=  $(foreach dir,$(LIBDIRS),-L$(dir)/lib) \
                     -L$(DEVKITPRO)/libnds/lib \
                     -L$(DEVKITPRO)/portlibs/nds/lib
 
-.PHONY: $(BUILD) clean all
+.PHONY: $(BUILD) clean all version
 
 all: $(BUILD)
+
+version:
+	@echo "ScratchDS v$(SCRATCHDS_VERSION) ($(BUILD_DATE))"
+	@echo "devkitARM: $(DEVKITARM_VER)"
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
