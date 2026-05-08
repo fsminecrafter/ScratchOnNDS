@@ -28,6 +28,8 @@ DATA        :=
 GRAPHICS    :=
 AUDIO       :=
 
+LIBDIRS     := $(DEVKITPRO)/libnds
+
 #-------------------------------------------------------------------------------
 # Version info — embed in binary via preprocessor defines
 #-------------------------------------------------------------------------------
