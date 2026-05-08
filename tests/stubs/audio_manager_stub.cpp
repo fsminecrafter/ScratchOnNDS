@@ -22,7 +22,9 @@ bool AudioManager::isPlaying() { return false; }
 void AudioManager::setVolume(int) {}
 
 bool AudioManager::loadWavToRam(ScratchSound&, const char*) { return false; }
+
 bool AudioManager::loadMp3ToRam(ScratchSound&, const char*) { return false; }
-bool AudioManager::setupStream(ScratchSound&, const char*)  { return false; }
+
 void AudioManager::playRamSound(ScratchSound&) {}
+
 void AudioManager::startStream(ScratchSound&) {}
