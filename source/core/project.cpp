@@ -200,6 +200,7 @@ void ScratchProject::parseCostumes(const char* json, jsmntok_t* toks,
         costume.rotationCenterX = costume.rotationCenterY = 0;
         costume.gfxPtr = costume.palPtr = nullptr;
         costume.width = costume.height = 0;
+        costume.isBackdrop = false;
         if (i >= numToks || toks[i].type != JSMN_OBJECT) { skipValue(toks, i, numToks); continue; }
         int nk = toks[i].size; i++;
         for (int k = 0; k < nk; k++) {
