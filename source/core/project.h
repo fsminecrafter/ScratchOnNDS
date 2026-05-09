@@ -291,7 +291,7 @@ private:
                      int& i, int numToks, std::vector<ScratchSound>& out);
     void parseBlocks(const char* json, jsmntok_t* toks,
                      int& i, int numToks,
-                     std::map<std::string, ScratchBlock>& out);
+                     std::vector<ScratchBlock>& out);
     void parseBlockInputs(const char* json, jsmntok_t* toks,
                           int& i, int numToks,
                           std::map<std::string, ScratchInput>& out);
@@ -300,6 +300,6 @@ private:
                           std::map<std::string, std::string>& out);
     void parseVariables(const char* json, jsmntok_t* toks,
                         int& i, int numToks,
-                        std::map<std::string, ScratchVariable>& out);
+                        std::vector<ScratchVariable>& out);
     void skipValue(jsmntok_t* toks, int& i, int numToks);
 };
