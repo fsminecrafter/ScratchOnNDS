@@ -595,10 +595,8 @@ void ScratchVM::setVariable(ScratchSprite* sprite,
 // Lookup block in sprite's block map
 // -----------------------------------------------------------------------
 ScratchBlock* ScratchVM::getBlock(ScriptThread& t, const std::string& id) {
-    for (auto& b : t.sprite->blocks) {
-        if (b.id == id) return &b;
-    }
-    return nullptr;
+    auto it = t.sprite->blocks.find(id);
+    return (it != t.sprite->blocks.end()) ? &it->second : nullptr;
 }
 
 // -----------------------------------------------------------------------
