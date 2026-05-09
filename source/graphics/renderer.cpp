@@ -297,8 +297,8 @@ void Renderer::renderUI(ScratchProject& project, InputHandler& input) {
     consoleSelect(&bottomConsole);
     consoleClear();          // wipe everything, no ghost text
 
-    iprintf("\x1b[0;0H");   // cursor to top-left
-    iprintf("--- Variables ---\n");
+    printf("\x1b[0;0H");   // cursor to top-left
+    printf("--- Variables ---\n");
 
     int shown = 0;
     for (auto& sprite : project.targets) {
@@ -313,11 +313,11 @@ void Renderer::renderUI(ScratchProject& project, InputHandler& input) {
     }
 
     if (input.isTouching()) {
-        iprintf("\x1b[20;0HTouch: (%3d,%3d)\n",
+        printf("\x1b[20;0HTouch: (%3d,%3d)\n",
                 input.getTouchX(), input.getTouchY());
     }
 
-    iprintf("\x1b[22;0H[A]B[X][Y][L][R][^][v][<][>]");
+    printf("\x1b[22;0H[A]B[X][Y][L][R][^][v][<][>]");
 }
 
 // -----------------------------------------------------------------------
