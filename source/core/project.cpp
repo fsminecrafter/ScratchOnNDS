@@ -269,7 +269,7 @@ void ScratchProject::parseBlocks(const char* json, jsmntok_t* toks,
             }
             else { skipValue(toks, i, numToks); }
         }
-        blocks[blockId] = block;
+        blocks.push_back(block);
     }
 }
 
