@@ -85,10 +85,10 @@ bool DPadTextInput::update() {
     return false;
 }
 void DPadTextInput::render(int y) {
-    iprintf("\x1b[%d;0H", y);
-    iprintf(COL_GREY "%s" COL_RESET "\n", prompt_);
-    iprintf(COL_WHITE "> %s" COL_CYAN "_" COL_RESET "\n", buf_);
-    iprintf(COL_GREY "< " COL_YELLOW "%c" COL_GREY " > [A]=Add [B]=Del [START]=OK\n",
+    printf("\x1b[%d;0H", y);
+    printf(COL_GREY "%s" COL_RESET "\n", prompt_);
+    printf(COL_WHITE "> %s" COL_CYAN "_" COL_RESET "\n", buf_);
+    printf(COL_GREY "< " COL_YELLOW "%c" COL_GREY " > [A]=Add [B]=Del [START]=OK\n",
             CHARS[charSel_]);
 }
 
@@ -337,30 +337,30 @@ void OverlayMenu::render() {
 }
 
 void OverlayMenu::renderHeader(const char* title) {
-    iprintf(COL_CYAN "================================" COL_RESET "\n");
-    iprintf(COL_YELLOW " ScratchDS " COL_WHITE "%-20s" COL_RESET "\n", title);
-    iprintf(COL_CYAN "================================" COL_RESET "\n");
+    printf(COL_CYAN "================================" COL_RESET "\n");
+    printf(COL_YELLOW " ScratchDS " COL_WHITE "%-20s" COL_RESET "\n", title);
+    printf(COL_CYAN "================================" COL_RESET "\n");
 }
 
 void OverlayMenu::renderFooter() {
-    iprintf("\x1b[23;0H");
-    iprintf(COL_GREY "[B]=Back [A]=Select [L+R+B]=Close" COL_RESET);
+    printf("\x1b[23;0H");
+    printf(COL_GREY "[B]=Back [A]=Select [L+R+B]=Close" COL_RESET);
 }
 
 void OverlayMenu::renderMain() {
     renderHeader("v" SCRATCHDS_VERSION);
-    iprintf("\n");
+    printf("\n");
 
     const char* items[] = { "  Info", "  Settings", "  Load Project", "  Resume" };
     const char* icons[] = { "i", "*", "^", ">" };
     for (int i = 0; i < 4; i++) {
         bool sel = (cursor_ == i);
-        iprintf("%s[%s]%s%s\n",
+        printf("%s[%s]%s%s\n",
                 sel ? COL_YELLOW : COL_GREY, icons[i], items[i], COL_RESET);
-        iprintf("\n");
+        printf("\n");
     }
-    iprintf("\n");
-    iprintf(COL_GREY " Hold L+R+B to reopen menu" COL_RESET "\n");
+    printf("\n");
+    printf(COL_GREY " Hold L+R+B to reopen menu" COL_RESET "\n");
     renderFooter();
 }
 
@@ -389,42 +389,42 @@ void OverlayMenu::renderInfo() {
     char ndsModel[32]; getNDSModel(ndsModel, sizeof(ndsModel));
     char projName[64]; getProjectName(projName, sizeof(projName));
 
-    iprintf("\n");
-    iprintf(COL_CYAN " Version    " COL_WHITE SCRATCHDS_VERSION COL_RESET "\n");
-    iprintf(COL_CYAN " Built      " COL_WHITE SCRATCHDS_BUILD_DATE COL_RESET "\n");
-    iprintf("\n");
-    iprintf(COL_CYAN " Device     " COL_WHITE "%s" COL_RESET "\n", ndsModel);
-    iprintf("\n");
+    printf("\n");
+    printf(COL_CYAN " Version    " COL_WHITE SCRATCHDS_VERSION COL_RESET "\n");
+    printf(COL_CYAN " Built      " COL_WHITE SCRATCHDS_BUILD_DATE COL_RESET "\n");
+    printf("\n");
+    printf(COL_CYAN " Device     " COL_WHITE "%s" COL_RESET "\n", ndsModel);
+    printf("\n");
 
-    iprintf(COL_CYAN " RAM Usage\n" COL_RESET);
-    iprintf(" [");
+    printf(COL_CYAN " RAM Usage\n" COL_RESET);
+    printf(" [");
     for (int i = 0; i < barWidth; i++) {
         if (i < filled)
-            iprintf(COL_RED "#" COL_RESET);
+            printf(COL_RED "#" COL_RESET);
         else
-            iprintf(COL_GREEN "-" COL_RESET);
+            printf(COL_GREEN "-" COL_RESET);
     }
     // Show in KB for readability (NDS EWRAM is only 4 MB)
-    iprintf("] %d/%dKB\n", usedRam / 1024, TOTAL_RAM / 1024);
-    iprintf(COL_GREY " Free: %dKB  Used: %dKB\n\n" COL_RESET,
+    printf("] %d/%dKB\n", usedRam / 1024, TOTAL_RAM / 1024);
+    printf(COL_GREY " Free: %dKB  Used: %dKB\n\n" COL_RESET,
             freeRam / 1024, usedRam / 1024);
 
-    iprintf(COL_CYAN " Project    " COL_WHITE "%.20s" COL_RESET "\n", projName);
-    iprintf(COL_CYAN " Target FPS " COL_WHITE "%d" COL_RESET "\n", settings_->targetFPS);
-    iprintf(COL_CYAN " Screen     " COL_WHITE "%s" COL_RESET "\n",
+    printf(COL_CYAN " Project    " COL_WHITE "%.20s" COL_RESET "\n", projName);
+    printf(COL_CYAN " Target FPS " COL_WHITE "%d" COL_RESET "\n", settings_->targetFPS);
+    printf(COL_CYAN " Screen     " COL_WHITE "%s" COL_RESET "\n",
             settings_->stageOnTop ? "Stage=Top" : "Stage=Bottom");
-    iprintf(COL_CYAN " Scale      " COL_WHITE "%s" COL_RESET "\n",
+    printf(COL_CYAN " Scale      " COL_WHITE "%s" COL_RESET "\n",
             settings_->stageScale == 0 ? "Stretch" :
             settings_->stageScale == 1 ? "Aspect" : "Native");
-    iprintf("\n");
-    iprintf(COL_GREY " devkitARM  " DEVKITARM_VERSION COL_RESET "\n");
+    printf("\n");
+    printf(COL_GREY " devkitARM  " DEVKITARM_VERSION COL_RESET "\n");
 
     renderFooter();
 }
 
 void OverlayMenu::renderSettings() {
     renderHeader("Settings");
-    iprintf("\n");
+    printf("\n");
 
     char fpsStr[8], scaleStr[16], fpsCountStr[8];
     snprintf(fpsStr,      sizeof(fpsStr),     "%d",  pending_.targetFPS);
@@ -450,26 +450,26 @@ void OverlayMenu::renderSettings() {
     for (int i = 0; i < 6; i++) {
         bool sel = (cursor_ == i);
         if (i == 5) {
-            iprintf("%s[APPLY & BACK]%s\n",
+            printf("%s[APPLY & BACK]%s\n",
                     sel ? COL_GREEN : COL_GREY, COL_RESET);
         } else {
-            iprintf("%s%s%s%s%s\n",
+            printf("%s%s%s%s%s\n",
                     sel ? COL_YELLOW : COL_GREY,
                     labels[i], COL_WHITE, values[i], COL_RESET);
         }
-        iprintf("\n");
+        printf("\n");
     }
     renderFooter();
 }
 
 void OverlayMenu::renderLoad() {
     renderHeader("Load Project");
-    iprintf(COL_GREY " Dir: %.26s\n" COL_RESET, currentDir_);
-    iprintf(COL_CYAN "--------------------------------" COL_RESET "\n");
+    printf(COL_GREY " Dir: %.26s\n" COL_RESET, currentDir_);
+    printf(COL_CYAN "--------------------------------" COL_RESET "\n");
 
     if (dirEntries_.empty()) {
-        iprintf(COL_RED "\n  No .sb3 files found.\n" COL_RESET);
-        iprintf(COL_GREY "  Place .sb3 files in:\n  fat:/scratch/\n" COL_RESET);
+        printf(COL_RED "\n  No .sb3 files found.\n" COL_RESET);
+        printf(COL_GREY "  Place .sb3 files in:\n  fat:/scratch/\n" COL_RESET);
     } else {
         const int VISIBLE = 14;
         int end = scrollOff_ + VISIBLE;
@@ -477,7 +477,7 @@ void OverlayMenu::renderLoad() {
         for (int i = scrollOff_; i < end; i++) {
             bool sel   = (cursor_ == i);
             bool isDir = dirEntries_[i].isDir;
-            iprintf("%s%s%.26s%s\n",
+            printf("%s%s%.26s%s\n",
                     sel ? COL_YELLOW : COL_WHITE,
                     isDir ? "[D] " : "    ",
                     dirEntries_[i].name,
@@ -485,42 +485,42 @@ void OverlayMenu::renderLoad() {
         }
     }
 
-    iprintf("\x1b[23;0H");
-    iprintf(COL_GREY "[A]=Select [B]=Up [START]=Cancel" COL_RESET);
+    printf("\x1b[23;0H");
+    printf(COL_GREY "[A]=Select [B]=Up [START]=Cancel" COL_RESET);
 }
 
 void OverlayMenu::renderCompile() {
     renderHeader("Compile");
-    iprintf("\n");
-    iprintf(COL_WHITE " Compiling Scratch project...\n\n" COL_RESET);
-    iprintf(COL_GREY " This converts the .sb3 into\n");
-    iprintf(" a pre-parsed binary format\n");
-    iprintf(" for faster loading from SD.\n\n" COL_RESET);
+    printf("\n");
+    printf(COL_WHITE " Compiling Scratch project...\n\n" COL_RESET);
+    printf(COL_GREY " This converts the .sb3 into\n");
+    printf(" a pre-parsed binary format\n");
+    printf(" for faster loading from SD.\n\n" COL_RESET);
 
-    iprintf(COL_CYAN " Progress: %3d%%\n [", compileProgress_);
+    printf(COL_CYAN " Progress: %3d%%\n [", compileProgress_);
     int filled = compileProgress_ / 5;
     for (int i = 0; i < 20; i++)
-        iprintf("%s", i < filled ? COL_GREEN "#" : COL_GREY "-");
-    iprintf(COL_CYAN "]\n\n" COL_RESET);
-    iprintf(COL_YELLOW " Status: %s\n" COL_RESET, compileStatus_);
+        printf("%s", i < filled ? COL_GREEN "#" : COL_GREY "-");
+    printf(COL_CYAN "]\n\n" COL_RESET);
+    printf(COL_YELLOW " Status: %s\n" COL_RESET, compileStatus_);
 
     if (compileProgress_ >= 100) {
-        iprintf("\n" COL_GREEN " Done! Output: fat:/scratch/out/\n" COL_RESET);
-        iprintf(COL_GREY " [A] to return to menu\n" COL_RESET);
+        printf("\n" COL_GREEN " Done! Output: fat:/scratch/out/\n" COL_RESET);
+        printf(COL_GREY " [A] to return to menu\n" COL_RESET);
         if (cachedKeysDown_ & KEY_A) { page_ = MenuPage::SETTINGS; cursor_ = 4; }
     }
 }
 
 void OverlayMenu::renderConfirmReset() {
     renderHeader("Confirm");
-    iprintf("\n\n");
-    iprintf(COL_WHITE " %s\n\n" COL_RESET, confirmMsg_);
-    iprintf("\n");
-    iprintf("%s [YES] %s  %s [NO] %s\n",
+    printf("\n\n");
+    printf(COL_WHITE " %s\n\n" COL_RESET, confirmMsg_);
+    printf("\n");
+    printf("%s [YES] %s  %s [NO] %s\n",
             cursor_ == 0 ? COL_GREEN : COL_GREY, COL_RESET,
             cursor_ == 1 ? COL_RED   : COL_GREY, COL_RESET);
-    iprintf("\n");
-    iprintf(COL_GREY " [Left/Right] to switch\n [A] to confirm\n" COL_RESET);
+    printf("\n");
+    printf(COL_GREY " [Left/Right] to switch\n [A] to confirm\n" COL_RESET);
 }
 
 // -----------------------------------------------------------------------
