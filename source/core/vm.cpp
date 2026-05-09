@@ -60,10 +60,10 @@ void ScratchVM::greenFlag() {
 // -----------------------------------------------------------------------
 void ScratchVM::startHatBlocks(BlockOpcode hat, ScratchSprite* sprite,
                                 const std::string& field) {
-    for (auto& kv : sprite->blocks) {
+    for (auto& b : sprite->blocks) {
         if (!b.topLevel) continue;
         if (b.opcode != hat) continue;
-        // For key/broadcast hats, check field matches
+
         if (hat == BlockOpcode::EVENT_WHENKEYPRESSED) {
             auto it = b.fields.find("KEY_OPTION");
             if (it == b.fields.end() || it->second != field) continue;
@@ -75,7 +75,7 @@ void ScratchVM::startHatBlocks(BlockOpcode hat, ScratchSprite* sprite,
 
         ScriptThread thread;
         thread.sprite = sprite;
-        thread.currentBlockId = b.nextId;  // first block after hat
+        thread.currentBlockId = b.nextId;
         thread.state = ScriptThread::RUNNING;
         thread.waitTimer = 0.0;
         thread.isClone = false;
