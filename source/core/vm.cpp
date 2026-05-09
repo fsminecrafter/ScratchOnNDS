@@ -61,7 +61,6 @@ void ScratchVM::greenFlag() {
 void ScratchVM::startHatBlocks(BlockOpcode hat, ScratchSprite* sprite,
                                 const std::string& field) {
     for (auto& kv : sprite->blocks) {
-        ScratchBlock& b = kv.second;
         if (!b.topLevel) continue;
         if (b.opcode != hat) continue;
         // For key/broadcast hats, check field matches
@@ -92,9 +91,8 @@ void ScratchVM::startHatBlocks(BlockOpcode hat, ScratchSprite* sprite,
 void ScratchVM::step(double dt) {
     globalTimer += dt;
 
-    // Process pending threads from last frame
-    for (auto& t : pendingThreads) threads.push_back(t);
-            if (threads.size() < 64)  // hard cap — NDS can't handle more
+    for (auto& t : pendingThreads) {
+        if (threads.size() < 64)
             threads.push_back(t);
     }
     pendingThreads.clear();
@@ -107,7 +105,6 @@ void ScratchVM::step(double dt) {
             continue;
         }
 
-        // Handle wait states
         if (thread.state == ScriptThread::WAITING_SECS) {
             thread.waitTimer -= dt;
             if (thread.waitTimer <= 0.0) {
@@ -121,12 +118,10 @@ void ScratchVM::step(double dt) {
             } else continue;
         }
 
-        // Execute up to MAX_STEPS_PER_FRAME blocks
         thread.stepsThisFrame = 0;
         executeThread(thread, dt);
     }
 }
-
 // -----------------------------------------------------------------------
 // Execute a single thread for one frame
 // -----------------------------------------------------------------------
@@ -573,8 +568,8 @@ ScratchValue ScratchVM::getVariable(ScratchSprite* sprite,
     }
     // Check stage globals
     if (project->getStage()) {
-        for (auto& kv : project->getStage()->variables) {
-            if (kv.second.name == name) return ScratchValue(kv.second.value);
+        for (auto& var : project->getStage()->variables) {
+            if (var.name == name) return ScratchValue(var.value);
         }
     }
     return ScratchValue(0.0);
@@ -583,13 +578,13 @@ ScratchValue ScratchVM::getVariable(ScratchSprite* sprite,
 void ScratchVM::setVariable(ScratchSprite* sprite,
                              const std::string& name, ScratchValue val) {
     if (sprite) {
-        for (auto& kv : sprite->variables) {
-            if (kv.second.name == name) { kv.second.value = val.toStr(); return; }
+        for (auto& var : sprite->variables) {
+            if (var.name == name) { var.value = val.toStr(); return; }
         }
     }
     if (project->getStage()) {
-        for (auto& kv : project->getStage()->variables) {
-            if (kv.second.name == name) { kv.second.value = val.toStr(); return; }
+        for (auto& var : project->getStage()->variables) {
+            if (var.name == name) { var.value = val.toStr(); return; }
         }
     }
 }
