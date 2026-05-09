@@ -12,6 +12,17 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+// devkitARM doesn't expose strcasecmp — provide a simple replacement
+static int svg_strcasecmp(const char* a, const char* b) {
+    while (*a && *b) {
+        char ca = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? *b + 32 : *b;
+        if (ca != cb) return (unsigned char)ca - (unsigned char)cb;
+        a++; b++;
+    }
+    return (unsigned char)*a - (unsigned char)*b;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal RGBA framebuffer (32-bit, software rendered, then quantised)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -86,8 +97,8 @@ static Rgba parseColour(const char* s, float opacity = 1.0f) {
         {nullptr,0,0,0}
     };
     for (int i = 0; named[i].name; i++) {
-        if (strcasecmp(s, named[i].name) == 0) {
-            uint8_t a2 = (strcasecmp(s,"none")==0) ? 0 : alpha;
+        if (svg_strcasecmp(s, named[i].name) == 0) {
+            uint8_t a2 = (svg_strcasecmp(s,"none")==0) ? 0 : alpha;
             return {named[i].r, named[i].g, named[i].b, a2};
         }
     }
