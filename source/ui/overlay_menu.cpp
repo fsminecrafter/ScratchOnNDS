@@ -1,7 +1,15 @@
 // =============================================================================
 // overlay_menu.cpp — ScratchDS Overlay Menu Implementation
+//
+// Key fix: removed ALL scanKeys() calls from OverlayMenu::update() and every
+// handleXxxInput() method.  The sole scanKeys() call each frame happens inside
+// InputHandler::update() (called at the top of mainLoop()).  OverlayMenu now
+// reads InputHandler::getKeysDown() / getKeysHeld() for its cached state.
+// This ensures D-pad up/down edge events are never cleared before the menu
+// can read them.
 // =============================================================================
 #include "overlay_menu.h"
+#include "../input/input_handler.h"       // for getKeysDown/getKeysHeld
 #include "../scratch_extension/nds_extension.h"
 #include <nds.h>
 #include <fat.h>
@@ -47,7 +55,7 @@ bool ScratchDSSettings::load(const char* path) {
 }
 
 // -----------------------------------------------------------------------
-// DPadTextInput
+// DPadTextInput — standalone modal, keeps its own scanKeys() call
 // -----------------------------------------------------------------------
 const char DPadTextInput::CHARS[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -66,10 +74,8 @@ void DPadTextInput::reset(const char* prompt, const char* initial) {
     charSel_ = 0;
 }
 
-// NOTE: DPadTextInput::update() calls scanKeys() internally because it is
-// used as a standalone modal widget that owns its own input polling.
-// All other input in the overlay is handled via the single scanKeys() call
-// at the top of OverlayMenu::update().
+// DPadTextInput::update() is a standalone modal — it IS allowed to call
+// scanKeys() because it blocks the normal frame loop while active.
 bool DPadTextInput::update() {
     scanKeys();
     u32 down = keysDown();
@@ -118,7 +124,6 @@ void OverlayMenu::init(ScratchDSSettings& settings) {
     confirmMsg_[0]   = '\0';
     confirmResult_   = false;
 
-    // Cached key state — populated once per frame by update()
     cachedKeysDown_ = 0;
     cachedKeysHeld_ = 0;
 
@@ -127,17 +132,19 @@ void OverlayMenu::init(ScratchDSSettings& settings) {
 }
 
 // -----------------------------------------------------------------------
-// OverlayMenu::update — returns true if VM should pause
+// OverlayMenu::update
+//
+// CRITICAL: do NOT call scanKeys() here.  InputHandler::update() already
+// called it earlier this frame.  We read the cached masks from
+// InputHandler so we see the same edge state the VM and NDSExtension see.
 // -----------------------------------------------------------------------
 bool OverlayMenu::update(float dt) {
-    // ── Single scanKeys() call for the entire menu system ──────────────
-    // All handleXxxInput() methods read cachedKeysDown_ / cachedKeysHeld_
-    // instead of calling scanKeys()/keysDown()/keysHeld() themselves.
-    scanKeys();
-    cachedKeysDown_ = keysDown();
-    cachedKeysHeld_ = keysHeld();
+    // Read key state from InputHandler's cached masks — NO scanKeys() call.
+    cachedKeysDown_ = InputHandler::getInstance().getKeysDown();
+    cachedKeysHeld_ = InputHandler::getInstance().getKeysHeld();
 
     if (!open_) {
+        // Check for L+R+B hold to open the menu
         if ((cachedKeysHeld_ & (KEY_L | KEY_R | KEY_B)) == (KEY_L | KEY_R | KEY_B)) {
             comboHoldTimer_ += dt;
             if (comboHoldTimer_ >= COMBO_HOLD_REQUIRED) {
@@ -150,7 +157,7 @@ bool OverlayMenu::update(float dt) {
         return false;
     }
 
-    // Menu is open — handle input and render
+    // Menu is open — handle input then render
     if (compiling_) tickCompile(dt);
     handleInput();
     render();
@@ -165,8 +172,9 @@ void OverlayMenu::open() {
     pending_   = *settings_;
 
     if (!consoleInited_) {
+        // Menu lives on the top (main) screen, BG layer 0
         consoleInit(&menuConsole_, 0, BgType_Text4bpp, BgSize_T_256x256,
-                    2, 0, true, true);
+                    31, 0, true, true);
         consoleInited_ = true;
     }
     consoleSelect(&menuConsole_);
@@ -177,8 +185,9 @@ void OverlayMenu::close() {
 }
 
 // -----------------------------------------------------------------------
-// Input dispatch — all methods use cachedKeysDown_ / cachedKeysHeld_
-// (no additional scanKeys() calls anywhere below this point)
+// Input dispatch — all methods read cachedKeysDown_ / cachedKeysHeld_
+// which were populated from InputHandler at the top of update().
+// No additional scanKeys() calls anywhere below this point.
 // -----------------------------------------------------------------------
 void OverlayMenu::handleInput() {
     switch (page_) {
@@ -207,8 +216,12 @@ void OverlayMenu::handleInput() {
 
 void OverlayMenu::handleMainInput() {
     const int MAIN_ITEMS = 4;
-    if (cachedKeysDown_ & KEY_UP)                    cursor_ = (cursor_ - 1 + MAIN_ITEMS) % MAIN_ITEMS;
-    if (cachedKeysDown_ & KEY_DOWN)                  cursor_ = (cursor_ + 1) % MAIN_ITEMS;
+    // D-pad up/down navigate the menu cursor
+    if (cachedKeysDown_ & KEY_UP)
+        cursor_ = (cursor_ - 1 + MAIN_ITEMS) % MAIN_ITEMS;
+    if (cachedKeysDown_ & KEY_DOWN)
+        cursor_ = (cursor_ + 1) % MAIN_ITEMS;
+
     if (cachedKeysDown_ & (KEY_A | KEY_START)) {
         switch (cursor_) {
             case 0: page_ = MenuPage::INFO;     cursor_ = 0; break;
@@ -272,8 +285,6 @@ void OverlayMenu::handleLoadInput() {
         if (dirEntries_[cursor_].isDir) {
             navigateInto(cursor_);
         } else {
-            // Build the full path safely — currentDir_ and name are each 256 bytes,
-            // selectedPath_ is 256 bytes, so we truncate gracefully.
             snprintf(selectedPath_, sizeof(selectedPath_), "%s", currentDir_);
             size_t dirLen = strlen(selectedPath_);
             if (dirLen < sizeof(selectedPath_) - 1) {
@@ -472,7 +483,7 @@ void OverlayMenu::renderCompile() {
     if (compileProgress_ >= 100) {
         printf("\n" COL_GREEN " Done! Output: fat:/scratch/out/\n" COL_RESET);
         printf(COL_GREY " [A] to return to menu\n" COL_RESET);
-        // Read cached state — scanKeys() was already called at the top of update()
+        // cachedKeysDown_ was set at the top of update(), safe to read here
         if (cachedKeysDown_ & KEY_A) { page_ = MenuPage::SETTINGS; cursor_ = 4; }
     }
 }
@@ -509,7 +520,7 @@ void OverlayMenu::applySettings() {
 }
 
 // -----------------------------------------------------------------------
-// Compile (simulated)
+// Compile (simulated progress)
 // -----------------------------------------------------------------------
 void OverlayMenu::startCompile() {
     compiling_       = true;
