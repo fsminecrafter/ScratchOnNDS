@@ -19,7 +19,7 @@ public:
     }
 
     void init();
-    void update();  // call once per frame
+    void update();  // call once per frame — calls scanKeys() exactly once
 
     // ---- Button queries (for Scratch "key pressed?" sensing) ----
     // keyName: "space", "up arrow", "down arrow", "left arrow", "right arrow",
@@ -33,6 +33,14 @@ public:
     bool isButtonDown(const std::string& btn);      // pressed this frame
     bool isButtonHeld(const std::string& btn);      // held
     bool isButtonReleased(const std::string& btn);  // released this frame
+
+    // ---- Raw cached key masks ----------------------------------------
+    // Use these instead of calling scanKeys()/keysDown()/keysHeld()
+    // yourself — there must be only ONE scanKeys() call per frame
+    // (performed inside InputHandler::update()).
+    u32 getKeysDown() const { return keysDownMask; }
+    u32 getKeysHeld() const { return keysHeldMask; }
+    u32 getKeysUp()   const { return keysUpMask;   }
 
     // ---- Touchscreen ----
     bool isTouching();
