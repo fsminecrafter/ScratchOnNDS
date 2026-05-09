@@ -113,6 +113,8 @@ public:
         return inst;
     }
 
+    void setConsole(PrintConsole* con) { externalConsole_ = con; }
+
     void init(ScratchDSSettings& settings);
 
     // Call every frame AFTER InputHandler::update() has been called.
