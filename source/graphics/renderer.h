@@ -78,6 +78,13 @@ private:
     // Sub-screen console for UI
     PrintConsole bottomConsole;
 
+    bool backdropLoaded;
+
+    bool loadSvg(const char* path, uint16_t** outGfx, uint16_t** outPal,
+                 int* outW, int* outH, int dstW, int dstH);
+
+    void renderBackdrop(ScratchProject& project);
+
     // Sprite size LUT
     SpriteSize bestSpriteSize(int w, int h);
     void getSpriteSize(SpriteSize sz, int& w, int& h);
