@@ -12,6 +12,12 @@
 #define MAX_OAM_SPRITES 128
 #define MAX_GFX_SLOTS   64
 
+//RAAAM
+
+#define SHARED_PAL_SIZE 256
+static uint16_t sharedSpritePal[SHARED_PAL_SIZE];
+static int      sharedPalCount;
+
 // Scratch stage is 480x360; NDS top screen is 256x192
 // Scale factor: ~0.533x (we use 256/480 = 0.5333)
 #define STAGE_SCALE_X (256.0 / 480.0)
