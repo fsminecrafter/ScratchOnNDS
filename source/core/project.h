@@ -266,7 +266,7 @@ struct ScratchProject {
     // Capped to MAX_SPRITES inside parseJson for RAM safety.
     std::vector<ScratchSprite> targets;
     std::map<std::string, std::string>     broadcasts;
-    std::map<std::string, ScratchVariable> globalVars;
+    std::vector<ScratchVariable> globalVars;
 
     std::string extractDir;
 
