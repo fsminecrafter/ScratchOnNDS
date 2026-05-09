@@ -162,7 +162,7 @@ int main() {
         FILE* test = fopen(g_settings.lastProjectPath, "rb");
         if (test) {
             fclose(test);
-            strncpy(projectPath, g_settings.lastProjectPath, 255);
+            snprintf(projectPath, sizeof(projectPath), "%s", g_settings.lastProjectPath);
             hasProject = true;
             printf("  Found: %.28s\n", projectPath);
         } else {
@@ -217,8 +217,7 @@ int main() {
         return 0;
     }
 
-    strncpy(g_settings.lastProjectPath, projectPath,
-            sizeof(g_settings.lastProjectPath) - 1);
+    snprintf(g_settings.lastProjectPath, sizeof(g_settings.lastProjectPath), "%s", projectPath);
     g_settings.save(SETTINGS_PATH);
 
     // ── Step 12: Start VM ───────────────────────────────────────────────
