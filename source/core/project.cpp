@@ -272,7 +272,7 @@ void ScratchProject::parseSounds(const char* json, jsmntok_t* toks,
 // -----------------------------------------------------------------------
 void ScratchProject::parseBlocks(const char* json, jsmntok_t* toks,
                                   int& i, int numToks,
-                                  std::map<std::string, ScratchBlock>& blocks) {
+                                  std::vector<ScratchBlock>& blocks) {
     if (i >= numToks || toks[i].type != JSMN_OBJECT) {
         skipValue(toks, i, numToks); return;
     }
@@ -403,7 +403,7 @@ void ScratchProject::parseBlockFields(const char* json, jsmntok_t* toks,
 // -----------------------------------------------------------------------
 void ScratchProject::parseVariables(const char* json, jsmntok_t* toks,
                                      int& i, int numToks,
-                                     std::map<std::string, ScratchVariable>& vars) {
+                                     std::vector<ScratchVariable>& vars) {
     if (i >= numToks || toks[i].type != JSMN_OBJECT) {
         skipValue(toks, i, numToks); return;
     }
@@ -422,7 +422,7 @@ void ScratchProject::parseVariables(const char* json, jsmntok_t* toks,
         } else {
             skipValue(toks, i, numToks);
         }
-        vars[varId] = var;
+        vars.push_back(var);
     }
 }
 
