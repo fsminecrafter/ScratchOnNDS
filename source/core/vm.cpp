@@ -567,8 +567,8 @@ void ScratchVM::stopAll() {
 ScratchValue ScratchVM::getVariable(ScratchSprite* sprite,
                                      const std::string& name) {
     if (sprite) {
-        for (auto& kv : sprite->variables) {
-            if (kv.second.name == name) return ScratchValue(kv.second.value);
+        for (auto& var : sprite->variables) {
+            if (var.name == name) return ScratchValue(var.value);
         }
     }
     // Check stage globals
