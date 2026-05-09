@@ -118,14 +118,13 @@ void OverlayMenu::init(ScratchDSSettings& settings) {
     compileTimer_    = 0;
     compileProgress_ = 0;
     comboHoldTimer_  = 0;
-    consoleInited_   = false;
+    externalConsole_ = nullptr;   // set via setConsole() from main.cpp
     currentDir_[0]   = '\0';
     selectedPath_[0] = '\0';
     confirmMsg_[0]   = '\0';
     confirmResult_   = false;
-
-    cachedKeysDown_ = 0;
-    cachedKeysHeld_ = 0;
+    cachedKeysDown_  = 0;
+    cachedKeysHeld_  = 0;
 
     strncpy(currentDir_, "fat:/scratch/", sizeof(currentDir_) - 1);
     currentDir_[sizeof(currentDir_) - 1] = '\0';
@@ -165,11 +164,11 @@ bool OverlayMenu::update(float dt) {
 }
 
 void OverlayMenu::open() {
-    open_      = true;
-    page_      = MenuPage::MAIN;
-    cursor_    = 0;
+    open_    = true;
+    page_    = MenuPage::MAIN;
+    cursor_  = 0;
     scrollOff_ = 0;
-    pending_   = *settings_;
+    pending_ = *settings_;
 
     if (!consoleInited_) {
         // Menu lives on the top (main) screen, BG layer 0
@@ -315,7 +314,7 @@ void OverlayMenu::handleConfirmInput(bool& confirmed) {
 // Render dispatch
 // -----------------------------------------------------------------------
 void OverlayMenu::render() {
-    consoleSelect(&menuConsole_);
+    if (externalConsole_) consoleSelect(externalConsole_);
     consoleClear();
     switch (page_) {
         case MenuPage::MAIN:         renderMain();         break;
