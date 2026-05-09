@@ -12,6 +12,8 @@
 struct jsmntok;
 typedef struct jsmntok jsmntok_t;
 
+static constexpr int MAX_BLOCKS = 256;
+
 // -----------------------------------------------------------------------
 // Asset references (resolved to file paths after extraction)
 // -----------------------------------------------------------------------
@@ -229,7 +231,7 @@ struct ScratchSprite {
     std::vector<ScratchCostume> costumes;
     std::vector<ScratchSound>   sounds;
     // Blocks stored as a map: id -> block (O(1) lookup by id)
-    std::map<std::string, ScratchBlock> blocks;
+    std::vector<ScratchBlock> blocks;  // reserve in parseBlocks
     std::map<std::string, ScratchVariable> variables;
     std::map<std::string, ScratchList>     lists;
 
