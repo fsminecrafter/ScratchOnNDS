@@ -6,6 +6,11 @@
 // Pauses the Scratch VM and renders a full-screen menu on the TOP screen
 // (leaving the bottom touchscreen free for menu navigation via touch OR d-pad).
 //
+// Input design: InputHandler::update() is the ONLY place scanKeys() is
+// called each frame.  OverlayMenu reads the cached key masks from
+// InputHandler::getKeysDown() / getKeysHeld() — never calls scanKeys()
+// itself (except DPadTextInput which is a standalone modal widget).
+//
 // Menu structure:
 //   ┌─────────────────────────────┐
 //   │  ScratchDS  [version]       │
@@ -110,9 +115,8 @@ public:
 
     void init(ScratchDSSettings& settings);
 
-    // Call every frame.
-    // Performs a single scanKeys() call, caches key state, then dispatches
-    // to input handlers.  No other method calls scanKeys().
+    // Call every frame AFTER InputHandler::update() has been called.
+    // Reads cached key state from InputHandler — does NOT call scanKeys().
     // Returns true if the Scratch VM should be paused this frame.
     bool update(float dt);
 
@@ -143,8 +147,8 @@ private:
     void renderHeader(const char* title);
     void renderFooter();
 
-    // Input handling — all read cachedKeysDown_ / cachedKeysHeld_,
-    // never call scanKeys() themselves.
+    // Input handling — all read cachedKeysDown_ / cachedKeysHeld_.
+    // None of these call scanKeys().
     void handleInput();
     void handleMainInput();
     void handleInfoInput();
@@ -165,10 +169,10 @@ private:
     void startCompile();
     void tickCompile(float dt);
 
-    // Drawing
+    // Drawing helpers
     void consoleClear();
 
-    // State
+    // ---- State ----
     bool            open_;
     MenuPage        page_;
     int             cursor_;
@@ -177,8 +181,10 @@ private:
     ScratchDSSettings* settings_;
     ScratchDSSettings  pending_;
 
-    // Cached key state — written once per frame by update(), read by all
-    // handleXxxInput() methods.  Eliminates redundant scanKeys() calls.
+    // Cached key state — populated once per frame by update() from
+    // InputHandler::getKeysDown() / getKeysHeld().
+    // All handleXxxInput() methods read these; nothing else calls
+    // scanKeys() so edge state is never lost.
     u32 cachedKeysDown_;
     u32 cachedKeysHeld_;
 
@@ -216,15 +222,16 @@ private:
 };
 
 // -----------------------------------------------------------------------
-// Simple on-screen D-pad character picker (for manual path entry)
-// DPadTextInput::update() calls scanKeys() internally because it is used
-// as a standalone modal widget outside the normal menu input flow.
+// Simple on-screen D-pad character picker (for manual path entry).
+// This is a standalone modal widget that owns its own input polling —
+// it calls scanKeys() internally because it runs outside the normal
+// per-frame InputHandler flow.
 // -----------------------------------------------------------------------
 class DPadTextInput {
 public:
     DPadTextInput();
     void reset(const char* prompt, const char* initial = "");
-    bool update();
+    bool update();   // calls scanKeys() internally — standalone modal only
     const char* getText() const { return buf_; }
     void render(int y);
 
