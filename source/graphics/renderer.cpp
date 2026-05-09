@@ -52,7 +52,8 @@ void Renderer::init() {
 // Load all project costume assets
 // -----------------------------------------------------------------------
 void Renderer::loadSprites(ScratchProject& project) {
-    for (auto& sprite : project.targets) {
+    for (int i = 0; i < project.targetCount; i++) {
+        ScratchSprite& sprite = project.targets[i];
         for (auto& costume : sprite.costumes) {
             loadCostume(costume, project.extractDir.c_str(), costume.dataFormat);
         }
@@ -298,7 +299,8 @@ void Renderer::renderUI(ScratchProject& project, InputHandler& input) {
     printf("\x1b[0;0H");
     printf("--- Variables ---\n");
     int shown = 0;
-    for (auto& sprite : project.targets) {
+    for (int i = 0; i < project.targetCount; i++) {
+        ScratchSprite& sprite = project.targets[i];
         for (auto& kv : sprite.variables) {
             if (kv.second.visible && shown < 16) {
                 printf("%-10s: %s\n",
