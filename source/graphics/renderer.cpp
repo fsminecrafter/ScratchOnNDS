@@ -301,11 +301,11 @@ void Renderer::renderUI(ScratchProject& project, InputHandler& input) {
     printf("--- Variables ---\n");
     int shown = 0;
     for (auto& sprite : project.targets) {
-        for (auto& kv : sprite.variables) {
-            if (kv.second.visible && shown < 16) {
+        for (auto& var : sprite.variables) {
+            if (var.visible && shown < 16) {
                 printf("%-10s: %s\n",
-                    kv.second.name.substr(0, 10).c_str(),
-                    kv.second.value.substr(0, 12).c_str());
+                    var.name.substr(0, 10).c_str(),
+                    var.value.substr(0, 12).c_str());
                 shown++;
             }
         }
