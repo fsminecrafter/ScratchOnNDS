@@ -315,7 +315,7 @@ void ScratchProject::parseBlocks(const char* json, jsmntok_t* toks,
                 skipValue(toks, i, numToks);
             }
         }
-        blocks[blockId] = std::move(block);
+        blocks.push_back(std::move(block));
     }
 }
 
