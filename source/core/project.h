@@ -31,8 +31,9 @@ struct ScratchCostume {
     double rotationCenterX;
     double rotationCenterY;
     // Runtime: pointer to loaded OAM sprite data
-    uint16_t* gfxPtr;
-    uint16_t* palPtr;
+    uint16_t* gfxPtr;   // VRAM pointer only — NOT heap allocated
+    bool      palUploaded;
+    int       palSlot;  // which 16-colour sub-palette slot (0-15)
     int width, height;
     bool isBackdrop;   // true if this costume belongs to the Stage
 };
