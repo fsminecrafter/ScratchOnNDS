@@ -44,8 +44,16 @@ void AudioManager::init() {
 // Load all sounds for all sprites
 // -----------------------------------------------------------------------
 void AudioManager::loadSounds(ScratchProject& project, const char* extractDir) {
+    const int RAM_BUDGET = 512 * 1024;  // reserve 512KB for sounds total
+    int usedBudget = 0;
     for (auto& sprite : project.targets) {
         for (auto& sound : sprite.sounds) {
+
+            if (usedBudget >= RAM_BUDGET) {
+                sound.loaded = false;
+                continue;
+            }
+            usedBudget += sound.pcmSize;
             char path[512];
             snprintf(path, sizeof(path), "%s/%s.%s",
                      extractDir, sound.assetId.c_str(), sound.dataFormat.c_str());
