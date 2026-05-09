@@ -297,28 +297,24 @@ void Renderer::renderBackdrop(ScratchProject& project) {
 void Renderer::renderUI(ScratchProject& project, InputHandler& input) {
     consoleSelect(&bottomConsole);
     consoleClear();
-
     printf("\x1b[0;0H");
     printf("--- Variables ---\n");
     int shown = 0;
     for (auto& sprite : project.targets) {
         for (auto& kv : sprite.variables) {
-                if (kv.second.visible && shown < 16) {
-                    printf("%-10s: %s\n",
-                        kv.second.name.substr(0, 10).c_str(),
-                        kv.second.value.substr(0, 12).c_str());
-                    shown++;
-                }
+            if (kv.second.visible && shown < 16) {
+                printf("%-10s: %s\n",
+                    kv.second.name.substr(0, 10).c_str(),
+                    kv.second.value.substr(0, 12).c_str());
+                shown++;
             }
         }
-
-        if (input.isTouching()) {
-            printf("\x1b[20;0HTouch: (%3d,%3d)\n",
-                    input.getTouchX(), input.getTouchY());
-        }
-
-        printf("\x1b[22;0H[A]B[X][Y][L][R][^][v][<][>]");
     }
+    if (input.isTouching()) {
+        printf("\x1b[20;0HTouch: (%3d,%3d)\n",
+                input.getTouchX(), input.getTouchY());
+    }
+    printf("\x1b[22;0H[A]B[X][Y][L][R][^][v][<][>]");
 }
 // -----------------------------------------------------------------------
 // PNG loader stub (same as before)
