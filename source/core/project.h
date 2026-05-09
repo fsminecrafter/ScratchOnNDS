@@ -34,6 +34,7 @@ struct ScratchCostume {
     uint16_t* gfxPtr;
     uint16_t* palPtr;
     int width, height;
+    bool isBackdrop;   // true if this costume belongs to the Stage
 };
 
 struct ScratchSound {
