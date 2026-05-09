@@ -142,6 +142,7 @@ int main() {
     // ── Step 8: Overlay menu ────────────────────────────────────────────
     OverlayMenu& menu = OverlayMenu::getInstance();
     menu.init(g_settings);
+    menu.setConsole(&g_subConsole);
     menu.setApplyCallback(onSettingsApplied);
     menu.setLoadCallback(onProjectLoad);
 
