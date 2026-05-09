@@ -15,10 +15,6 @@
 // jsmn.h trigger "defined but not used" warnings in TUs that include
 // project.h but never call jsmn functions directly (vm.cpp, renderer.cpp,
 // audio_manager.cpp, etc.).
-#ifndef JSMN_STATIC
-#define JSMN_STATIC
-#endif
-#include "jsmn.h"
 
 // -----------------------------------------------------------------------
 // Asset references (resolved to file paths after extraction)
