@@ -1,5 +1,5 @@
 // =============================================================================
-// renderer.cpp — Updated with SVG rasterization and proper backdrop rendering
+// renderer.cpp — Fixed BMP loading, backdrop detection, screen management
 // =============================================================================
 #include "renderer.h"
 #include "../core/svg_rasterizer.h"
@@ -17,13 +17,9 @@
 // -----------------------------------------------------------------------
 // BG tile setup for backdrop rendering
 // NDS BG in bitmap mode: we use BG2 in 256×192 8bpp bitmap mode (Mode 5).
-// Each frame we blit the current backdrop palette and pixels.
 // -----------------------------------------------------------------------
 #define BG_BITMAP_VRAM ((uint8_t*)0x06000000)  // VRAM bank A mapped as main BG
 #define BG_PAL_MAIN    ((uint16_t*)0x05000000)  // BG palette RAM (256 entries)
-
-//static uint16_t sharedSpritePal[SHARED_PAL_SIZE];
-//static int      sharedPalCount;
 
 // -----------------------------------------------------------------------
 // Init renderer state
@@ -39,16 +35,23 @@ void Renderer::init() {
 
     oamInit(&oamMain, SpriteMapping_1D_32, false);
 
-    // Set up BG2 in extended rotation/scaling bitmap mode for backdrop
-    // Mode 5: BG2 and BG3 can be 256×192 8bpp bitmaps
-    // We use BG3 (layer 3) for the backdrop so sprites appear on top
+    // BG3 for backdrop (8bpp bitmap 256x256, map at slot 0, tiles at slot 0)
     bgHandle = bgInit(3, BgType_Bmp8, BgSize_B8_256x256, 0, 0);
 
     consoleInit(&bottomConsole, 0, BgType_Text4bpp, BgSize_T_256x256,
                 2, 0, false, true);
 
     // Clear backdrop with dark grey
-    memset(BG_BITMAP_VRAM, 0, 256*192);
+    memset(BG_BITMAP_VRAM, 0, 256 * 192);
+}
+
+// -----------------------------------------------------------------------
+// Clear the bottom screen console fully
+// Call this before writing new content to avoid ghost text
+// -----------------------------------------------------------------------
+void Renderer::clearBottomConsole() {
+    consoleSelect(&bottomConsole);
+    consoleClear();
 }
 
 // -----------------------------------------------------------------------
@@ -71,10 +74,14 @@ void Renderer::loadCostume(ScratchCostume& costume, const char* extractDir,
     snprintf(path, sizeof(path), "%s/%s.%s",
              extractDir, costume.assetId.c_str(), format.c_str());
 
-    // For backdrops (stage), use larger size to fill the screen
-    // We detect stage costumes by checking if the rotationCenter equals stage center
-    bool isLikelyBackdrop = (costume.rotationCenterX >= 200 &&
-                              costume.rotationCenterY >= 150);
+    // Detect backdrop: stage costumes in Scratch typically have rotation
+    // centers at the stage center (240, 180 for 480×360 stage).
+    // We detect more robustly by checking both rotation center AND if the
+    // parent sprite's isStage flag — but we don't have the sprite here,
+    // so use a generous threshold.
+    bool isLikelyBackdrop = (costume.rotationCenterX >= 180 &&
+                              costume.rotationCenterY >= 130);
+
     int dstW = isLikelyBackdrop ? 256 : 64;
     int dstH = isLikelyBackdrop ? 192 : 64;
 
@@ -87,40 +94,40 @@ void Renderer::loadCostume(ScratchCostume& costume, const char* extractDir,
     if (format == "png") {
         ok = loadPng(path, &gfx, &pal, &w, &h);
     } else if (format == "bmp") {
-        ok = loadBmp(path, &gfx, &pal, &w, &h);
+        ok = loadBmp(path, &gfx, &pal, &w, &h,
+                     isLikelyBackdrop ? 256 : 64,
+                     isLikelyBackdrop ? 192 : 64);
     } else if (format == "svg") {
         ok = loadSvg(path, &gfx, &pal, &w, &h, dstW, dstH);
     }
 
     if (!ok || !gfx || !pal) {
-        // Fallback: generate a coloured placeholder
-        w = 32; h = 32;
-        gfx = (uint16_t*)calloc(w * h / 2 + 1, 1);
+        // Fallback: generate a visible placeholder
+        w = isLikelyBackdrop ? 256 : 32;
+        h = isLikelyBackdrop ? 192 : 32;
+        size_t pixCount = (size_t)(w * h);
+        gfx = (uint16_t*)malloc(pixCount);
         pal = (uint16_t*)calloc(256, 2);
         if (gfx && pal) {
-            // Fill with a visible colour (magenta for SVG, cyan for others)
-            uint8_t* px8 = (uint8_t*)gfx;
-            memset(px8, 1, w * h);
+            memset(gfx, 1, pixCount);
             pal[0] = 0;
             pal[1] = (format == "svg") ?
                      (uint16_t)RGB15(31, 0, 31) :   // magenta
                      (uint16_t)RGB15(0, 31, 31);     // cyan
             ok = true;
+        } else {
+            free(gfx); free(pal);
+            return;
         }
     }
-
-    if (!ok || !gfx || !pal) return;
 
     costume.width  = w;
     costume.height = h;
 
-    // Stage backdrops are stored specially — not in OAM
+    // Stage backdrops stored as heap buffer, blitted each frame to BG VRAM
     if (isLikelyBackdrop) {
-        // Store as a flat buffer directly on the costume struct
-        // We repurpose gfxPtr to point to a heap buffer (not VRAM)
-        // Renderer will blit this to BG VRAM each frame
-        costume.gfxPtr = gfx;   // 8bpp pixel data (cast from uint16_t*)
-        costume.palPtr = pal;
+        costume.gfxPtr    = gfx;
+        costume.palPtr    = pal;
         costume.isBackdrop = true;
         return;
     }
@@ -138,13 +145,10 @@ void Renderer::loadCostume(ScratchCostume& costume, const char* extractDir,
     uint16_t* vramGfx = oamAllocateGfx(&oamMain, sz, SpriteColorFormat_256Color);
     if (!vramGfx) { free(gfx); free(pal); return; }
 
-    // Copy pixel data (gfx is an 8bpp byte buffer cast as uint16_t*)
     size_t byteCount = (size_t)(sw * sh);
     dmaCopy(gfx, vramGfx, byteCount);
     free(gfx);
 
-    // Upload palette to a slot based on costume index
-    // We use the extended palette area — for simplicity use one shared palette
     uint16_t* vramPal = SPRITE_PALETTE;
     dmaCopy(pal, vramPal, 256 * 2);
     free(pal);
@@ -176,9 +180,8 @@ bool Renderer::loadSvg(const char* path, uint16_t** outGfx, uint16_t** outPal,
 
     memcpy(*outGfx, img.pixels, pixBytes);
     memcpy(*outPal, img.palette, img.palCount * 2);
-    // Zero-fill unused palette entries
     if (img.palCount < 256)
-        memset((uint8_t*)*outPal + img.palCount*2, 0, (256 - img.palCount)*2);
+        memset((uint8_t*)*outPal + img.palCount * 2, 0, (256 - img.palCount) * 2);
 
     return true;
 }
@@ -212,9 +215,6 @@ void Renderer::renderFrame(ScratchProject& project) {
         ScratchCostume& costume = sprite->costumes[sprite->currentCostume];
         if (!costume.gfxPtr || costume.isBackdrop) continue;
 
-        // Scratch coords → NDS screen coords
-        // Scratch: x∈[-240,240], y∈[-180,180] (center=0,0)
-        // NDS: x∈[0,255], y∈[0,191]
         double scaledX = sprite->x * STAGE_SCALE_X;
         double scaledY = -sprite->y * STAGE_SCALE_Y;
         int screenX = (int)(NDS_CENTER_X + scaledX) - costume.width  / 2;
@@ -239,17 +239,12 @@ void Renderer::renderFrame(ScratchProject& project) {
         SpriteSize sz = bestSpriteSize(costume.width, costume.height);
         oamSet(&oamMain, oamIdx++,
                screenX, screenY,
-               0,                          // priority
-               0,                          // palette index
-               sz,
+               0, 0, sz,
                SpriteColorFormat_256Color,
                costume.gfxPtr,
                affineIdx,
-               (affineIdx >= 0),           // double size
-               false,                      // hidden
-               hFlip,                      // h-flip
-               false,                      // v-flip
-               false);                     // mosaic
+               (affineIdx >= 0),
+               false, hFlip, false, false);
     }
 }
 
@@ -259,72 +254,80 @@ void Renderer::renderFrame(ScratchProject& project) {
 void Renderer::renderBackdrop(ScratchProject& project) {
     ScratchSprite* stage = project.getStage();
     if (!stage || stage->costumes.empty()) {
-        // Clear to dark grey if no backdrop
         memset(BG_BITMAP_VRAM, 0, 256 * 192);
         return;
     }
 
     ScratchCostume& bg = stage->costumes[stage->currentCostume];
-    if (!bg.gfxPtr) return;
+    if (!bg.gfxPtr || !bg.isBackdrop) {
+        // No backdrop loaded — fill with a neutral grey
+        memset(BG_BITMAP_VRAM, 128, 256 * 192);
+        // Also write a simple 2-colour palette so index 128 shows as white
+        uint16_t* bgPalRam = BG_PAL_MAIN;
+        bgPalRam[128] = RGB15(31, 31, 31); // white
+        return;
+    }
 
     // Upload palette
-    uint16_t* bgPalRam = BG_PAL_MAIN;
-    dmaCopy(bg.palPtr, bgPalRam, 256 * 2);
+    dmaCopy(bg.palPtr, BG_PAL_MAIN, 256 * 2);
 
     // Blit 8bpp pixels to BG VRAM
-    // bg.width and bg.height are the rasterized dimensions (up to 256×192)
     uint8_t* src = (uint8_t*)bg.gfxPtr;
     uint8_t* dst = BG_BITMAP_VRAM;
 
     if (bg.width == 256 && bg.height == 192) {
-        // Direct DMA copy
         dmaCopy(src, dst, 256 * 192);
     } else {
-        // Scale/blit to fit 256×192
+        // Nearest-neighbour scale to fill 256×192
         for (int y = 0; y < 192; y++) {
             int sy = (y * bg.height) / 192;
+            uint8_t* srcRow = src + sy * bg.width;
+            uint8_t* dstRow = dst + y * 256;
             for (int x = 0; x < 256; x++) {
-                int sx = (x * bg.width) / 256;
-                dst[y * 256 + x] = src[sy * bg.width + sx];
+                dstRow[x] = srcRow[(x * bg.width) / 256];
             }
         }
     }
 }
 
 // -----------------------------------------------------------------------
-// Render UI on bottom screen
+// Render UI on bottom screen — fully clears before writing
 // -----------------------------------------------------------------------
 void Renderer::renderUI(ScratchProject& project, InputHandler& input) {
     consoleSelect(&bottomConsole);
-    consoleClear();
-    printf("\x1b[0;0H");
-    printf("--- Variables ---\n");
+    consoleClear();          // wipe everything, no ghost text
+
+    iprintf("\x1b[0;0H");   // cursor to top-left
+    iprintf("--- Variables ---\n");
+
     int shown = 0;
     for (auto& sprite : project.targets) {
         for (auto& var : sprite.variables) {
             if (var.visible && shown < 16) {
-                printf("%-10s: %s\n",
+                iprintf("%-10s: %s\n",
                     var.name.substr(0, 10).c_str(),
                     var.value.substr(0, 12).c_str());
                 shown++;
             }
         }
     }
+
     if (input.isTouching()) {
-        printf("\x1b[20;0HTouch: (%3d,%3d)\n",
+        iprintf("\x1b[20;0HTouch: (%3d,%3d)\n",
                 input.getTouchX(), input.getTouchY());
     }
-    printf("\x1b[22;0H[A]B[X][Y][L][R][^][v][<][>]");
+
+    iprintf("\x1b[22;0H[A]B[X][Y][L][R][^][v][<][>]");
 }
+
 // -----------------------------------------------------------------------
-// PNG loader stub (same as before)
+// PNG loader stub — loads a 32×32 coloured placeholder
 // -----------------------------------------------------------------------
 bool Renderer::loadPng(const char* path, uint16_t** outGfx, uint16_t** outPal,
                         int* outW, int* outH) {
     FILE* f = fopen(path, "rb");
     if (!f) return false;
 
-    // Read just enough for the colour hint — no full file load
     uint8_t header[51];
     size_t got = fread(header, 1, sizeof(header), f);
     fclose(f);
@@ -343,86 +346,203 @@ bool Renderer::loadPng(const char* path, uint16_t** outGfx, uint16_t** outPal,
 }
 
 // -----------------------------------------------------------------------
-// BMP loader (24-bit uncompressed) — unchanged
+// BMP loader — supports 1/4/8/24/32bpp, all standard header sizes
+//
+// Key fixes vs. previous version:
+//  1. Read full BMP file header (BITMAPFILEHEADER = 14 bytes) then
+//     DIB header (BITMAPINFOHEADER = 40 bytes minimum) separately so we
+//     correctly handle extended headers (V4, V5) where dataOfs > 54.
+//  2. For 1/4/8bpp, read the embedded colour table into the palette
+//     directly rather than re-quantising.
+//  3. Use dataOfs from the file header to seek to pixel data, not a
+//     hardcoded offset — fixes blank white BMPs that have colour tables.
+//  4. Correct stride: rows are DWORD-aligned regardless of bpp.
+//  5. Scale output to fit dstW×dstH using nearest-neighbour so backdrops
+//     fill the screen without needing a separate scale pass.
 // -----------------------------------------------------------------------
-bool Renderer::loadBmp(const char* path, uint16_t** outGfx, uint16_t** outPal,
-                        int* outW, int* outH) {
+bool Renderer::loadBmp(const char* path,
+                       uint16_t** outGfx, uint16_t** outPal,
+                       int* outW, int* outH,
+                       int maxW, int maxH) {
     FILE* f = fopen(path, "rb");
     if (!f) return false;
-    
-    uint8_t hdr[54];
-    if (fread(hdr, 1, 54, f) < 54) { fclose(f); return false; }
-    if (hdr[0] != 'B' || hdr[1] != 'M') { fclose(f); return false; }
-    
-    int w        = *(int32_t*)(hdr + 18);
-    int h        = *(int32_t*)(hdr + 22);
-    int bpp      = *(uint16_t*)(hdr + 28);
-    int dataOfs  = *(int32_t*)(hdr + 10);
-    bool flipped = (h > 0);
-    if (h < 0) h = -h;
-    if (bpp != 24 && bpp != 32) { fclose(f); return false; }
-    if (w > 64) w = 64;
-    if (h > 64) h = 64;
-    *outW = w; *outH = h;
 
-    // Allocate output buffers
-    // outGfx holds 8bpp indices, cast to uint16_t* for API compatibility
-    uint8_t*  px8 = (uint8_t*)malloc(w * h);
+    // ── BMP file header (14 bytes) ────────────────────────────────────
+    uint8_t fileHdr[14];
+    if (fread(fileHdr, 1, 14, f) < 14) { fclose(f); return false; }
+    if (fileHdr[0] != 'B' || fileHdr[1] != 'M') { fclose(f); return false; }
+
+    uint32_t dataOfs = (uint32_t)fileHdr[10]
+                     | ((uint32_t)fileHdr[11] <<  8)
+                     | ((uint32_t)fileHdr[12] << 16)
+                     | ((uint32_t)fileHdr[13] << 24);
+
+    // ── DIB header (at least 40 bytes) ────────────────────────────────
+    uint8_t dibHdr[124];  // max V5 header size
+    if (fread(dibHdr, 1, 40, f) < 40) { fclose(f); return false; }
+
+    uint32_t dibSize  = (uint32_t)dibHdr[0] | ((uint32_t)dibHdr[1]<<8)
+                      | ((uint32_t)dibHdr[2]<<16) | ((uint32_t)dibHdr[3]<<24);
+
+    int32_t  srcW    = (int32_t)( (uint32_t)dibHdr[4]  | ((uint32_t)dibHdr[5]<<8)
+                                | ((uint32_t)dibHdr[6]<<16) | ((uint32_t)dibHdr[7]<<24) );
+    int32_t  srcH    = (int32_t)( (uint32_t)dibHdr[8]  | ((uint32_t)dibHdr[9]<<8)
+                                | ((uint32_t)dibHdr[10]<<16) | ((uint32_t)dibHdr[11]<<24) );
+    uint16_t bpp     = (uint16_t)( dibHdr[14] | (dibHdr[15]<<8) );
+    uint32_t compress= (uint32_t)dibHdr[16] | ((uint32_t)dibHdr[17]<<8)
+                      | ((uint32_t)dibHdr[18]<<16) | ((uint32_t)dibHdr[19]<<24);
+    uint32_t colorsUsed = (uint32_t)dibHdr[32] | ((uint32_t)dibHdr[33]<<8)
+                        | ((uint32_t)dibHdr[34]<<16) | ((uint32_t)dibHdr[35]<<24);
+
+    // Only support uncompressed (0=RGB, 3=BITFIELDS) and standard bpp
+    if (compress != 0 && compress != 3) { fclose(f); return false; }
+    if (bpp != 1 && bpp != 4 && bpp != 8 && bpp != 24 && bpp != 32) {
+        fclose(f); return false;
+    }
+
+    bool flipped = (srcH > 0);  // positive height = bottom-up
+    if (srcH < 0) srcH = -srcH;
+    if (srcW <= 0) { fclose(f); return false; }
+
+    // Skip remainder of DIB header (V4/V5 can be up to 124 bytes total)
+    if (dibSize > 40) {
+        uint32_t extra = dibSize - 40;
+        if (extra > sizeof(dibHdr) - 40) extra = sizeof(dibHdr) - 40;
+        fread(dibHdr + 40, 1, extra, f);
+    }
+
+    // ── Colour table (for 1/4/8bpp) ──────────────────────────────────
+    // Entries are RGBQUAD (4 bytes each): B, G, R, reserved
+    uint16_t palBuf[256];
+    memset(palBuf, 0, sizeof(palBuf));
+    int palEntries = 0;
+
+    if (bpp <= 8) {
+        palEntries = (int)colorsUsed;
+        if (palEntries == 0) palEntries = 1 << bpp;  // default
+        if (palEntries > 256) palEntries = 256;
+
+        uint8_t quad[4];
+        for (int p = 0; p < palEntries; p++) {
+            if (fread(quad, 1, 4, f) < 4) break;
+            // quad = B G R reserved
+            palBuf[p] = (uint16_t)RGB15(quad[2] >> 3, quad[1] >> 3, quad[0] >> 3);
+        }
+    }
+
+    // ── Seek to pixel data ────────────────────────────────────────────
+    if (fseek(f, (long)dataOfs, SEEK_SET) != 0) { fclose(f); return false; }
+
+    // ── Determine output dimensions ───────────────────────────────────
+    int dstW = (srcW  < maxW) ? srcW  : maxW;
+    int dstH = (srcH < maxH) ? srcH : maxH;
+    *outW = dstW;
+    *outH = dstH;
+
+    // ── Allocate output buffers ───────────────────────────────────────
+    uint8_t*  px8 = (uint8_t*)malloc((size_t)(dstW * dstH));
     uint16_t* pal = (uint16_t*)calloc(256, 2);
     if (!px8 || !pal) { free(px8); free(pal); fclose(f); return false; }
 
-    int bytesPerPixel = bpp / 8;
-    int stride = (w * bytesPerPixel + 3) & ~3;  // row padded to 4 bytes
-    uint8_t* row = (uint8_t*)malloc(stride);
-    if (!row) { free(px8); free(pal); fclose(f); return false; }
+    // Stride: each row is padded to a multiple of 4 bytes
+    int bitsPerRow  = srcW * (int)bpp;
+    int stride      = ((bitsPerRow + 31) / 32) * 4;
+    uint8_t* rowBuf = (uint8_t*)malloc((size_t)stride);
+    if (!rowBuf) { free(px8); free(pal); fclose(f); return false; }
 
-    // Index 0 = transparent black
-    pal[0] = 0;
+    // ── Build output palette ──────────────────────────────────────────
+    // Index 0 = transparent / background
     int palCount = 1;
 
-    fseek(f, dataOfs, SEEK_SET);
+    if (bpp <= 8) {
+        // Copy pre-built colour table; index 0 stays transparent black
+        pal[0] = 0;
+        for (int p = 0; p < palEntries; p++) {
+            pal[p + 1] = palBuf[p];
+        }
+        palCount = palEntries + 1;
+    } else {
+        pal[0] = 0;
+        palCount = 1;
+    }
 
-    for (int y = 0; y < h; y++) {
-        // BMP rows are bottom-up when h > 0
-        int dstY = flipped ? (h - 1 - y) : y;
-        fread(row, 1, stride, f);
-        for (int x = 0; x < w; x++) {
-            uint8_t b = row[x * bytesPerPixel + 0];
-            uint8_t g = row[x * bytesPerPixel + 1];
-            uint8_t r = row[x * bytesPerPixel + 2];
-            // Skip transparent pixels if 32bpp and alpha=0
-            uint8_t a = (bpp == 32) ? row[x * bytesPerPixel + 3] : 255;
-            if (a < 128) { px8[dstY * w + x] = 0; continue; }
+    // ── Decode rows ───────────────────────────────────────────────────
+    for (int y = 0; y < srcH; y++) {
+        if (fread(rowBuf, 1, (size_t)stride, f) < (size_t)stride) {
+            // Truncated file — zero-fill remaining
+            memset(px8, 0, (size_t)(dstW * dstH));
+            break;
+        }
 
-            uint16_t c15 = (uint16_t)((r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10));
-            // Find or add palette entry
-            int idx = 0;
-            for (int p = 1; p < palCount; p++) {
-                if (pal[p] == c15) { idx = p; break; }
-            }
-            if (idx == 0 && palCount < 256) {
-                pal[palCount] = c15;
-                idx = palCount++;
-            } else if (idx == 0) {
-                // Palette full: find nearest colour
-                int best = 1, bestD = 0x7FFFFFFF;
-                int tr = r, tg = g, tb = b;
-                for (int p = 1; p < 256; p++) {
-                    int pr = (pal[p] & 0x1F) << 3;
-                    int pg = ((pal[p] >> 5) & 0x1F) << 3;
-                    int pb = ((pal[p] >> 10) & 0x1F) << 3;
-                    int d = (tr-pr)*(tr-pr)+(tg-pg)*(tg-pg)+(tb-pb)*(tb-pb);
-                    if (d < bestD) { bestD = d; best = p; }
+        // Skip rows beyond dstH
+        if (y >= dstH) continue;
+
+        int dstY = flipped ? (dstH - 1 - y) : y;
+        if (dstY < 0 || dstY >= dstH) continue;
+
+        uint8_t* dstRow = px8 + dstY * dstW;
+
+        for (int x = 0; x < dstW; x++) {
+            // Map source x to dstW (nearest-neighbour scale-down)
+            int sx = (srcW > dstW) ? (x * srcW / dstW) : x;
+            if (sx >= srcW) sx = srcW - 1;
+
+            uint8_t idx = 0;
+
+            if (bpp == 1) {
+                int bit = 7 - (sx & 7);
+                idx = (uint8_t)(((rowBuf[sx >> 3] >> bit) & 1) + 1);
+            } else if (bpp == 4) {
+                uint8_t nibble = rowBuf[sx >> 1];
+                idx = (uint8_t)(((sx & 1) ? (nibble & 0x0F) : (nibble >> 4)) + 1);
+            } else if (bpp == 8) {
+                idx = rowBuf[sx] + 1;   // shift by 1 because pal[0]=transparent
+                if (idx == 0) idx = 1;  // handle 0-index -> transparent slot
+            } else {
+                // 24/32-bit: quantise to our growing palette
+                int bpp_bytes = bpp / 8;
+                uint8_t b8 = rowBuf[sx * bpp_bytes + 0];
+                uint8_t g8 = rowBuf[sx * bpp_bytes + 1];
+                uint8_t r8 = rowBuf[sx * bpp_bytes + 2];
+                uint8_t a8 = (bpp == 32) ? rowBuf[sx * bpp_bytes + 3] : 255;
+
+                if (a8 < 128) { dstRow[x] = 0; continue; }
+
+                uint16_t c15 = (uint16_t)RGB15(r8 >> 3, g8 >> 3, b8 >> 3);
+
+                // Find existing palette entry
+                int found = 0;
+                for (int p = 1; p < palCount; p++) {
+                    if (pal[p] == c15) { found = p; break; }
                 }
-                idx = best;
+                if (found == 0) {
+                    if (palCount < 256) {
+                        pal[palCount] = c15;
+                        found = palCount++;
+                    } else {
+                        // Palette full: find nearest colour
+                        int best = 1, bestD = 0x7FFFFFFF;
+                        int tr = r8, tg = g8, tb = b8;
+                        for (int p = 1; p < 256; p++) {
+                            int pr = (pal[p] & 0x1F) << 3;
+                            int pg = ((pal[p] >> 5) & 0x1F) << 3;
+                            int pb = ((pal[p] >> 10) & 0x1F) << 3;
+                            int d  = (tr-pr)*(tr-pr)+(tg-pg)*(tg-pg)+(tb-pb)*(tb-pb);
+                            if (d < bestD) { bestD = d; best = p; }
+                        }
+                        found = best;
+                    }
+                }
+                idx = (uint8_t)found;
             }
-            px8[dstY * w + x] = (uint8_t)idx;
+            dstRow[x] = idx;
         }
     }
-    free(row);
+
+    free(rowBuf);
     fclose(f);
 
-    *outGfx = (uint16_t*)px8;  // caller frees via free()
+    *outGfx = (uint16_t*)px8;
     *outPal = pal;
     return true;
 }
