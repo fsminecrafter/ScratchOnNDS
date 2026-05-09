@@ -55,8 +55,7 @@ void Renderer::init() {
 // Load all project costume assets
 // -----------------------------------------------------------------------
 void Renderer::loadSprites(ScratchProject& project) {
-    for (int i = 0; i < project.targetCount; i++) {
-        ScratchSprite& sprite = project.targets[i];
+    for (auto& sprite : project.targets) {
         for (auto& costume : sprite.costumes) {
             loadCostume(costume, project.extractDir.c_str(), costume.dataFormat);
         }
@@ -302,26 +301,26 @@ void Renderer::renderUI(ScratchProject& project, InputHandler& input) {
     printf("\x1b[0;0H");
     printf("--- Variables ---\n");
     int shown = 0;
-    for (int i = 0; i < project.targetCount; i++) {
-        ScratchSprite& sprite = project.targets[i];
+    for (auto& sprite : project.targets) {
         for (auto& kv : sprite.variables) {
-            if (kv.second.visible && shown < 16) {
-                printf("%-10s: %s\n",
-                    kv.second.name.substr(0, 10).c_str(),
-                    kv.second.value.substr(0, 12).c_str());
-                shown++;
+            ScratchSprite& sprite = project.targets[i];
+                if (kv.second.visible && shown < 16) {
+                    printf("%-10s: %s\n",
+                        kv.second.name.substr(0, 10).c_str(),
+                        kv.second.value.substr(0, 12).c_str());
+                    shown++;
+                }
             }
         }
-    }
 
-    if (input.isTouching()) {
-        printf("\x1b[20;0HTouch: (%3d,%3d)\n",
-                input.getTouchX(), input.getTouchY());
-    }
+        if (input.isTouching()) {
+            printf("\x1b[20;0HTouch: (%3d,%3d)\n",
+                    input.getTouchX(), input.getTouchY());
+        }
 
-    printf("\x1b[22;0H[A]B[X][Y][L][R][^][v][<][>]");
+        printf("\x1b[22;0H[A]B[X][Y][L][R][^][v][<][>]");
+    }
 }
-
 // -----------------------------------------------------------------------
 // PNG loader stub (same as before)
 // -----------------------------------------------------------------------
