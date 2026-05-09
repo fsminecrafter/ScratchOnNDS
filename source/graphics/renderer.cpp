@@ -303,7 +303,6 @@ void Renderer::renderUI(ScratchProject& project, InputHandler& input) {
     int shown = 0;
     for (auto& sprite : project.targets) {
         for (auto& kv : sprite.variables) {
-            ScratchSprite& sprite = project.targets[i];
                 if (kv.second.visible && shown < 16) {
                     printf("%-10s: %s\n",
                         kv.second.name.substr(0, 10).c_str(),
