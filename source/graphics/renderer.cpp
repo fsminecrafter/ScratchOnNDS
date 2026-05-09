@@ -354,38 +354,81 @@ bool Renderer::loadBmp(const char* path, uint16_t** outGfx, uint16_t** outPal,
                         int* outW, int* outH) {
     FILE* f = fopen(path, "rb");
     if (!f) return false;
+    
     uint8_t hdr[54];
     if (fread(hdr, 1, 54, f) < 54) { fclose(f); return false; }
     if (hdr[0] != 'B' || hdr[1] != 'M') { fclose(f); return false; }
-    int w   = *(int32_t*)(hdr + 18);
-    int h   = *(int32_t*)(hdr + 22);
-    int bpp = *(uint16_t*)(hdr + 28);
+    
+    int w        = *(int32_t*)(hdr + 18);
+    int h        = *(int32_t*)(hdr + 22);
+    int bpp      = *(uint16_t*)(hdr + 28);
+    int dataOfs  = *(int32_t*)(hdr + 10);
+    bool flipped = (h > 0);
     if (h < 0) h = -h;
-    if (bpp != 24) { fclose(f); return false; }
+    if (bpp != 24 && bpp != 32) { fclose(f); return false; }
     if (w > 64) w = 64;
     if (h > 64) h = 64;
-    *outGfx = (uint16_t*)malloc(w * h + 1);
-    *outPal = (uint16_t*)calloc(256, 2);
     *outW = w; *outH = h;
-    if (!*outGfx || !*outPal) { fclose(f); return false; }
-    int palCount = 1;
-    (*outPal)[0] = 0;
-    int stride = ((w*3+3)&~3);
+
+    // Allocate output buffers
+    // outGfx holds 8bpp indices, cast to uint16_t* for API compatibility
+    uint8_t*  px8 = (uint8_t*)malloc(w * h);
+    uint16_t* pal = (uint16_t*)calloc(256, 2);
+    if (!px8 || !pal) { free(px8); free(pal); fclose(f); return false; }
+
+    int bytesPerPixel = bpp / 8;
+    int stride = (w * bytesPerPixel + 3) & ~3;  // row padded to 4 bytes
     uint8_t* row = (uint8_t*)malloc(stride);
-    uint8_t* pixels8 = (uint8_t*)*outGfx;
-    if (!row) { fclose(f); return false; }
-    for (int y = h-1; y >= 0; y--) {
+    if (!row) { free(px8); free(pal); fclose(f); return false; }
+
+    // Index 0 = transparent black
+    pal[0] = 0;
+    int palCount = 1;
+
+    fseek(f, dataOfs, SEEK_SET);
+
+    for (int y = 0; y < h; y++) {
+        // BMP rows are bottom-up when h > 0
+        int dstY = flipped ? (h - 1 - y) : y;
         fread(row, 1, stride, f);
         for (int x = 0; x < w; x++) {
-            uint8_t  b=row[x*3+0], g=row[x*3+1], r=row[x*3+2];
-            uint16_t c15 = (uint16_t)RGB15(r>>3,g>>3,b>>3);
-            int idx=0;
-            for (int p=1;p<palCount;p++) if ((*outPal)[p]==c15){idx=p;break;}
-            if (idx==0 && palCount<256){(*outPal)[palCount]=c15;idx=palCount++;}
-            pixels8[y*w+x]=(uint8_t)idx;
+            uint8_t b = row[x * bytesPerPixel + 0];
+            uint8_t g = row[x * bytesPerPixel + 1];
+            uint8_t r = row[x * bytesPerPixel + 2];
+            // Skip transparent pixels if 32bpp and alpha=0
+            uint8_t a = (bpp == 32) ? row[x * bytesPerPixel + 3] : 255;
+            if (a < 128) { px8[dstY * w + x] = 0; continue; }
+
+            uint16_t c15 = (uint16_t)((r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10));
+            // Find or add palette entry
+            int idx = 0;
+            for (int p = 1; p < palCount; p++) {
+                if (pal[p] == c15) { idx = p; break; }
+            }
+            if (idx == 0 && palCount < 256) {
+                pal[palCount] = c15;
+                idx = palCount++;
+            } else if (idx == 0) {
+                // Palette full: find nearest colour
+                int best = 1, bestD = 0x7FFFFFFF;
+                int tr = r, tg = g, tb = b;
+                for (int p = 1; p < 256; p++) {
+                    int pr = (pal[p] & 0x1F) << 3;
+                    int pg = ((pal[p] >> 5) & 0x1F) << 3;
+                    int pb = ((pal[p] >> 10) & 0x1F) << 3;
+                    int d = (tr-pr)*(tr-pr)+(tg-pg)*(tg-pg)+(tb-pb)*(tb-pb);
+                    if (d < bestD) { bestD = d; best = p; }
+                }
+                idx = best;
+            }
+            px8[dstY * w + x] = (uint8_t)idx;
         }
     }
-    free(row); fclose(f);
+    free(row);
+    fclose(f);
+
+    *outGfx = (uint16_t*)px8;  // caller frees via free()
+    *outPal = pal;
     return true;
 }
 
