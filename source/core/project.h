@@ -178,24 +178,33 @@ enum class BlockOpcode {
 // A single Scratch block (node in the block graph)
 // -----------------------------------------------------------------------
 struct ScratchInput {
-    bool isShadow;
-    std::string blockId;   // reference to another block (reporter)
-    // Or a literal value:
-    int    valueType;      // Scratch value types: 4=num, 5=positive num, etc.
-    std::string strValue;
-    double      numValue;
+    bool   isShadow;
+    int    valueType;
+    double numValue;
+    // Use fixed-size buffers instead of std::string
+    char   blockId[32];   // block IDs are MD5-like, 20 chars max in Scratch
+    char   strValue[64];  // literal string values are usually short
+};
+
+struct ScratchField {
+    char key[24];
+    char value[48];
 };
 
 struct ScratchBlock {
-    std::string id;
+    char        id[24];
     BlockOpcode opcode;
-    std::string opcodeStr;
-    std::string parentId;
-    std::string nextId;
-    bool topLevel;
-    bool shadow;
-    std::map<std::string, ScratchInput>  inputs;
-    std::map<std::string, std::string>   fields;
+    char        opcodeStr[48];
+    char        parentId[24];
+    char        nextId[24];
+    bool        topLevel;
+    bool        shadow;
+    // Fixed arrays instead of std::map:
+    ScratchInput inputs[8];
+    char         inputKeys[8][24];
+    int          inputCount;
+    ScratchField fields[4];
+    int          fieldCount;
 };
 
 // -----------------------------------------------------------------------
