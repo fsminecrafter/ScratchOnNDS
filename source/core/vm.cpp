@@ -94,6 +94,9 @@ void ScratchVM::step(double dt) {
 
     // Process pending threads from last frame
     for (auto& t : pendingThreads) threads.push_back(t);
+            if (threads.size() < 64)  // hard cap — NDS can't handle more
+            threads.push_back(t);
+    }
     pendingThreads.clear();
 
     for (int i = (int)threads.size() - 1; i >= 0; i--) {
