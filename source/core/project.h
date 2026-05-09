@@ -9,33 +9,25 @@
 #include <vector>
 #include <map>
 
-// Define JSMN_STATIC before including jsmn.h so that jsmn_init() and
-// jsmn_parse() get internal (static) linkage in every translation unit
-// that includes this header.  Without this, the inline definitions in
-// jsmn.h trigger "defined but not used" warnings in TUs that include
-// project.h but never call jsmn functions directly (vm.cpp, renderer.cpp,
-// audio_manager.cpp, etc.).
-
 struct jsmntok_t;
-
-#define MAX_SPRITES 16
 
 // -----------------------------------------------------------------------
 // Asset references (resolved to file paths after extraction)
 // -----------------------------------------------------------------------
 struct ScratchCostume {
     std::string name;
-    std::string assetId;    // MD5 hash filename
+    std::string assetId;
     std::string dataFormat; // "png", "svg", "bmp"
-    int bitmapResolution;
+    int    bitmapResolution;
     double rotationCenterX;
     double rotationCenterY;
     // Runtime: pointer to loaded OAM sprite data
-    uint16_t* gfxPtr;   // VRAM pointer only — NOT heap allocated
+    uint16_t* gfxPtr;
+    uint16_t* palPtr;
     bool      palUploaded;
-    int       palSlot;  // which 16-colour sub-palette slot (0-15)
-    int width, height;
-    bool isBackdrop;   // true if this costume belongs to the Stage
+    int       palSlot;
+    int       width, height;
+    bool      isBackdrop;
 };
 
 struct ScratchSound {
@@ -43,14 +35,14 @@ struct ScratchSound {
     std::string assetId;
     std::string dataFormat;  // "wav", "mp3"
     double rate;
-    int sampleCount;
+    int    sampleCount;
     // Runtime state
-    bool loaded;
-    bool isStreamed;         // true if >2MB, stream from SD
-    uint8_t* pcmData;        // for small sounds, PCM in RAM
-    size_t   pcmSize;
-    int      mmSoundId;      // maxmod sound id / bit-depth flag
-    std::string streamPath;  // path for SD streaming
+    bool        loaded;
+    bool        isStreamed;
+    uint8_t*    pcmData;
+    size_t      pcmSize;
+    int         mmSoundId;
+    std::string streamPath;
 };
 
 // -----------------------------------------------------------------------
@@ -142,7 +134,7 @@ enum class BlockOpcode {
     OPERATOR_MOD,
     OPERATOR_ROUND,
     OPERATOR_MATHOP,
-    // Variables
+    // Variables / Lists
     DATA_SETVARIABLETO,
     DATA_CHANGEVARIABLEBY,
     DATA_SHOWVARIABLE,
@@ -175,36 +167,30 @@ enum class BlockOpcode {
 };
 
 // -----------------------------------------------------------------------
-// A single Scratch block (node in the block graph)
+// A single Scratch block input slot
 // -----------------------------------------------------------------------
 struct ScratchInput {
-    bool   isShadow;
-    int    valueType;
-    double numValue;
-    // Use fixed-size buffers instead of std::string
-    char   blockId[32];   // block IDs are MD5-like, 20 chars max in Scratch
-    char   strValue[64];  // literal string values are usually short
+    bool        isShadow;
+    int         valueType;
+    double      numValue;
+    std::string blockId;   // ID of a reporter block, if any
+    std::string strValue;  // literal string value
 };
 
-struct ScratchField {
-    char key[24];
-    char value[48];
-};
-
+// -----------------------------------------------------------------------
+// A single Scratch block
+// Uses std::map for inputs/fields so vm.cpp's .at() / .count() calls work.
+// -----------------------------------------------------------------------
 struct ScratchBlock {
-    char        id[24];
+    std::string id;
     BlockOpcode opcode;
-    char        opcodeStr[48];
-    char        parentId[24];
-    char        nextId[24];
+    std::string opcodeStr;
+    std::string parentId;
+    std::string nextId;
     bool        topLevel;
     bool        shadow;
-    // Fixed arrays instead of std::map:
-    ScratchInput inputs[8];
-    char         inputKeys[8][24];
-    int          inputCount;
-    ScratchField fields[4];
-    int          fieldCount;
+    std::map<std::string, ScratchInput> inputs;
+    std::map<std::string, std::string>  fields;
 };
 
 // -----------------------------------------------------------------------
@@ -230,18 +216,19 @@ struct ScratchList {
 // -----------------------------------------------------------------------
 struct ScratchSprite {
     std::string name;
-    bool isStage;
-    bool visible;
+    bool   isStage;
+    bool   visible;
     double x, y;
     double size;
-    int direction;
-    int currentCostume;
+    int    direction;
+    int    currentCostume;
     std::string rotationStyle;
-    int layerOrder;
+    int    layerOrder;
 
     std::vector<ScratchCostume> costumes;
     std::vector<ScratchSound>   sounds;
-    std::vector<ScratchBlock> blocks;
+    // Blocks stored as a map: id -> block (O(1) lookup by id)
+    std::map<std::string, ScratchBlock> blocks;
     std::map<std::string, ScratchVariable> variables;
     std::map<std::string, ScratchList>     lists;
 
@@ -252,11 +239,12 @@ struct ScratchSprite {
     int  oamId;
 };
 
-ScratchBlock* findBlock(ScratchSprite& sprite, const std::string& id) {
-    for (auto& b : sprite.blocks) {
-        if (b.id == id) return &b;
-    }
-    return nullptr;
+// -----------------------------------------------------------------------
+// Helper: find a block by id inside a sprite
+// -----------------------------------------------------------------------
+inline ScratchBlock* findBlock(ScratchSprite& sprite, const std::string& id) {
+    auto it = sprite.blocks.find(id);
+    return (it != sprite.blocks.end()) ? &it->second : nullptr;
 }
 
 // -----------------------------------------------------------------------
@@ -270,8 +258,9 @@ struct ScratchMeta {
 
 struct ScratchProject {
     ScratchMeta meta;
-    ScratchSprite targets[MAX_SPRITES];
-    int           targetCount;
+    // Vector — heap allocated, not on the stack.
+    // Capped to MAX_SPRITES inside parseJson for RAM safety.
+    std::vector<ScratchSprite> targets;
     std::map<std::string, std::string>     broadcasts;
     std::map<std::string, ScratchVariable> globalVars;
 
@@ -280,9 +269,13 @@ struct ScratchProject {
     bool load(const char* dir);
 
     ScratchSprite* findSprite(const std::string& name);
-    ScratchSprite* getStage() { return targets.empty() ? nullptr : &targets[0]; }
+    ScratchSprite* getStage() {
+        return targets.empty() ? nullptr : &targets[0];
+    }
 
 private:
+    static constexpr int MAX_SPRITES = 16;
+
     bool parseJson(const char* json, size_t len);
     BlockOpcode opcodeFromStr(const std::string& s);
 
@@ -293,12 +286,16 @@ private:
     void parseSounds(const char* json, jsmntok_t* toks,
                      int& i, int numToks, std::vector<ScratchSound>& out);
     void parseBlocks(const char* json, jsmntok_t* toks,
-                     int& i, int numToks, std::map<std::string, ScratchBlock>& out);
+                     int& i, int numToks,
+                     std::map<std::string, ScratchBlock>& out);
     void parseBlockInputs(const char* json, jsmntok_t* toks,
-                          int& i, int numToks, std::map<std::string, ScratchInput>& out);
+                          int& i, int numToks,
+                          std::map<std::string, ScratchInput>& out);
     void parseBlockFields(const char* json, jsmntok_t* toks,
-                          int& i, int numToks, std::map<std::string, std::string>& out);
+                          int& i, int numToks,
+                          std::map<std::string, std::string>& out);
     void parseVariables(const char* json, jsmntok_t* toks,
-                        int& i, int numToks, std::map<std::string, ScratchVariable>& out);
+                        int& i, int numToks,
+                        std::map<std::string, ScratchVariable>& out);
     void skipValue(jsmntok_t* toks, int& i, int numToks);
 };
