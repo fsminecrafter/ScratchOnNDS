@@ -39,7 +39,7 @@ bool ZipLoader::extract(const char* zipPath, const char* destDir) {
         }
 
         // Build destination path
-        char destPath[512];
+        char destPath[768];  // destDir(256) + '/' + m_filename(512) = safe
         snprintf(destPath, sizeof(destPath), "%s/%s", destDir, stat.m_filename);
 
         if (mz_zip_reader_is_file_a_directory(&zip, i)) {
