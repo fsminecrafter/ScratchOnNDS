@@ -232,7 +232,7 @@ struct ScratchSprite {
 
     std::vector<ScratchCostume> costumes;
     std::vector<ScratchSound>   sounds;
-    std::map<std::string, ScratchBlock>    blocks;
+    std::vector<ScratchBlock> blocks;
     std::map<std::string, ScratchVariable> variables;
     std::map<std::string, ScratchList>     lists;
 
@@ -242,6 +242,13 @@ struct ScratchSprite {
     int  cloneParentIndex;
     int  oamId;
 };
+
+ScratchBlock* findBlock(ScratchSprite& sprite, const std::string& id) {
+    for (auto& b : sprite.blocks) {
+        if (b.id == id) return &b;
+    }
+    return nullptr;
+}
 
 // -----------------------------------------------------------------------
 // Top-level project
