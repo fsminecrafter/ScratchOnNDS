@@ -9,7 +9,8 @@
 #include <vector>
 #include <map>
 
-struct jsmntok_t;
+#define JSMN_STATIC
+#include "jsmn.h"
 
 // -----------------------------------------------------------------------
 // Asset references (resolved to file paths after extraction)
