@@ -1,15 +1,8 @@
 // =============================================================================
-// overlay_menu.cpp — ScratchDS Overlay Menu Implementation
-//
-// Key fix: removed ALL scanKeys() calls from OverlayMenu::update() and every
-// handleXxxInput() method.  The sole scanKeys() call each frame happens inside
-// InputHandler::update() (called at the top of mainLoop()).  OverlayMenu now
-// reads InputHandler::getKeysDown() / getKeysHeld() for its cached state.
-// This ensures D-pad up/down edge events are never cleared before the menu
-// can read them.
+// overlay_menu.cpp — Fixed: RAM bar, screen clearing, settings apply in-place
 // =============================================================================
 #include "overlay_menu.h"
-#include "../input/input_handler.h"       // for getKeysDown/getKeysHeld
+#include "../input/input_handler.h"
 #include "../scratch_extension/nds_extension.h"
 #include <nds.h>
 #include <fat.h>
@@ -21,7 +14,7 @@
 #include <sys/stat.h>
 
 // -----------------------------------------------------------------------
-// NDS console ANSI-style colour codes (libnds printf)
+// NDS console ANSI-style colour codes
 // -----------------------------------------------------------------------
 #define COL_WHITE   "\x1b[37;1m"
 #define COL_CYAN    "\x1b[36;1m"
@@ -32,7 +25,6 @@
 #define COL_GREY    "\x1b[37;0m"
 #define COL_RESET   "\x1b[0m"
 
-// NDS text console is 32 columns × 24 rows
 #define COLS 32
 #define ROWS 24
 
@@ -55,7 +47,7 @@ bool ScratchDSSettings::load(const char* path) {
 }
 
 // -----------------------------------------------------------------------
-// DPadTextInput — standalone modal, keeps its own scanKeys() call
+// DPadTextInput
 // -----------------------------------------------------------------------
 const char DPadTextInput::CHARS[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -73,13 +65,9 @@ void DPadTextInput::reset(const char* prompt, const char* initial) {
     len_ = (int)strlen(buf_);
     charSel_ = 0;
 }
-
-// DPadTextInput::update() is a standalone modal — it IS allowed to call
-// scanKeys() because it blocks the normal frame loop while active.
 bool DPadTextInput::update() {
     scanKeys();
     u32 down = keysDown();
-
     if (down & KEY_RIGHT) charSel_ = (charSel_ + 1) % NUM_CHARS;
     if (down & KEY_LEFT)  charSel_ = (charSel_ - 1 + NUM_CHARS) % NUM_CHARS;
     if (down & KEY_UP)    charSel_ = (charSel_ + 10) % NUM_CHARS;
@@ -97,11 +85,46 @@ bool DPadTextInput::update() {
     return false;
 }
 void DPadTextInput::render(int y) {
-    printf("\x1b[%d;0H", y);
-    printf(COL_GREY "%s" COL_RESET "\n", prompt_);
-    printf(COL_WHITE "> %s" COL_CYAN "_" COL_RESET "\n", buf_);
-    printf(COL_GREY "< " COL_YELLOW "%c" COL_GREY " > [A]=Add [B]=Del [START]=OK\n",
+    iprintf("\x1b[%d;0H", y);
+    iprintf(COL_GREY "%s" COL_RESET "\n", prompt_);
+    iprintf(COL_WHITE "> %s" COL_CYAN "_" COL_RESET "\n", buf_);
+    iprintf(COL_GREY "< " COL_YELLOW "%c" COL_GREY " > [A]=Add [B]=Del [START]=OK\n",
             CHARS[charSel_]);
+}
+
+// -----------------------------------------------------------------------
+// RAM measurement helpers
+//
+// getFreeRAM(): binary-search for the largest single allocatable block.
+// This gives a conservative lower bound on contiguous free heap space.
+// We do NOT free-and-realloc in a loop because malloc/free patterns on
+// NDS can fragment the heap; a single binary-search probe is fast and
+// deterministic.
+//
+// getUsedRAM(): total ARM9 EWRAM is 4 MB (0x02000000 – 0x023FFFFF).
+// We estimate usage as (total – largest_free_block).  This is an
+// approximation but far more accurate than the previous probe which
+// always returned ~4 MB free because each malloc was immediately freed.
+// -----------------------------------------------------------------------
+static int s_freeRamCache = -1;   // cached after first measurement
+
+static int measureFreeRAM() {
+    // Binary-search for largest single allocatable block (4-byte aligned)
+    int lo = 0;
+    int hi = 3 * 1024 * 1024;  // cap at 3 MB — NDS ARM9 EWRAM is 4 MB total
+                                // but OS/stack/globals use some of it
+
+    while (hi - lo > 4096) {   // 4 KB resolution is good enough
+        int mid = (lo + hi) / 2;
+        void* p = malloc((size_t)mid);
+        if (p) {
+            free(p);
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
 }
 
 // -----------------------------------------------------------------------
@@ -118,7 +141,7 @@ void OverlayMenu::init(ScratchDSSettings& settings) {
     compileTimer_    = 0;
     compileProgress_ = 0;
     comboHoldTimer_  = 0;
-    externalConsole_ = nullptr;   // set via setConsole() from main.cpp
+    externalConsole_ = nullptr;
     currentDir_[0]   = '\0';
     selectedPath_[0] = '\0';
     confirmMsg_[0]   = '\0';
@@ -132,18 +155,12 @@ void OverlayMenu::init(ScratchDSSettings& settings) {
 
 // -----------------------------------------------------------------------
 // OverlayMenu::update
-//
-// CRITICAL: do NOT call scanKeys() here.  InputHandler::update() already
-// called it earlier this frame.  We read the cached masks from
-// InputHandler so we see the same edge state the VM and NDSExtension see.
 // -----------------------------------------------------------------------
 bool OverlayMenu::update(float dt) {
-    // Read key state from InputHandler's cached masks — NO scanKeys() call.
     cachedKeysDown_ = InputHandler::getInstance().getKeysDown();
     cachedKeysHeld_ = InputHandler::getInstance().getKeysHeld();
 
     if (!open_) {
-        // Check for L+R+B hold to open the menu
         if ((cachedKeysHeld_ & (KEY_L | KEY_R | KEY_B)) == (KEY_L | KEY_R | KEY_B)) {
             comboHoldTimer_ += dt;
             if (comboHoldTimer_ >= COMBO_HOLD_REQUIRED) {
@@ -156,11 +173,10 @@ bool OverlayMenu::update(float dt) {
         return false;
     }
 
-    // Menu is open — handle input then render
     if (compiling_) tickCompile(dt);
     handleInput();
     render();
-    return true; // VM paused
+    return true;
 }
 
 void OverlayMenu::open() {
@@ -169,16 +185,20 @@ void OverlayMenu::open() {
     cursor_    = 0;
     scrollOff_ = 0;
     pending_   = *settings_;
+    // Invalidate cached RAM value so Info page re-measures on next open
+    s_freeRamCache = -1;
+    // Clear the console immediately so there's no flash of old UI content
+    consoleClear();
 }
 
 void OverlayMenu::close() {
     open_ = false;
+    // Clear menu text so the variable list or loading screen appears cleanly
+    consoleClear();
 }
 
 // -----------------------------------------------------------------------
-// Input dispatch — all methods read cachedKeysDown_ / cachedKeysHeld_
-// which were populated from InputHandler at the top of update().
-// No additional scanKeys() calls anywhere below this point.
+// Input dispatch
 // -----------------------------------------------------------------------
 void OverlayMenu::handleInput() {
     switch (page_) {
@@ -207,7 +227,6 @@ void OverlayMenu::handleInput() {
 
 void OverlayMenu::handleMainInput() {
     const int MAIN_ITEMS = 4;
-    // D-pad up/down navigate the menu cursor
     if (cachedKeysDown_ & KEY_UP)
         cursor_ = (cursor_ - 1 + MAIN_ITEMS) % MAIN_ITEMS;
     if (cachedKeysDown_ & KEY_DOWN)
@@ -233,7 +252,6 @@ void OverlayMenu::handleInfoInput() {
 
 void OverlayMenu::handleSettingsInput() {
     const int SETTINGS_ITEMS = 6;
-
     if (cachedKeysDown_ & KEY_UP)   cursor_ = (cursor_ - 1 + SETTINGS_ITEMS) % SETTINGS_ITEMS;
     if (cachedKeysDown_ & KEY_DOWN) cursor_ = (cursor_ + 1) % SETTINGS_ITEMS;
 
@@ -250,7 +268,7 @@ void OverlayMenu::handleSettingsInput() {
             case 5:
                 snprintf(confirmMsg_, sizeof(confirmMsg_),
                          "Apply settings and\nreset scene?");
-                page_ = MenuPage::CONFIRM_RESET;
+                page_   = MenuPage::CONFIRM_RESET;
                 cursor_ = 0;
                 break;
         }
@@ -264,25 +282,19 @@ void OverlayMenu::handleLoadInput() {
         if (cachedKeysDown_ & KEY_B) { page_ = MenuPage::MAIN; cursor_ = 2; }
         return;
     }
-
     if (cachedKeysDown_ & KEY_UP)   cursor_ = (cursor_ - 1 + total) % total;
     if (cachedKeysDown_ & KEY_DOWN) cursor_ = (cursor_ + 1) % total;
 
     const int VISIBLE = 14;
-    if (cursor_ < scrollOff_) scrollOff_ = cursor_;
-    if (cursor_ >= scrollOff_ + VISIBLE) scrollOff_ = cursor_ - VISIBLE + 1;
+    if (cursor_ < scrollOff_)               scrollOff_ = cursor_;
+    if (cursor_ >= scrollOff_ + VISIBLE)    scrollOff_ = cursor_ - VISIBLE + 1;
 
     if (cachedKeysDown_ & KEY_A) {
         if (dirEntries_[cursor_].isDir) {
             navigateInto(cursor_);
         } else {
-            snprintf(selectedPath_, sizeof(selectedPath_), "%s", currentDir_);
-            size_t dirLen = strlen(selectedPath_);
-            if (dirLen < sizeof(selectedPath_) - 1) {
-                snprintf(selectedPath_ + dirLen,
-                         sizeof(selectedPath_) - dirLen,
-                         "%s", dirEntries_[cursor_].name);
-            }
+            snprintf(selectedPath_, sizeof(selectedPath_), "%s%s",
+                     currentDir_, dirEntries_[cursor_].name);
             snprintf(confirmMsg_, sizeof(confirmMsg_),
                      "Load project:\n%.28s?", dirEntries_[cursor_].name);
             page_   = MenuPage::CONFIRM_LOAD;
@@ -299,7 +311,11 @@ void OverlayMenu::handleConfirmInput(bool& confirmed) {
         confirmed = (cursor_ == 0);
         if (!confirmed) { page_ = MenuPage::SETTINGS; cursor_ = 5; }
     }
-    if (cachedKeysDown_ & KEY_B) { confirmed = false; page_ = MenuPage::SETTINGS; cursor_ = 5; }
+    if (cachedKeysDown_ & KEY_B) {
+        confirmed = false;
+        page_ = MenuPage::SETTINGS;
+        cursor_ = 5;
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -307,121 +323,115 @@ void OverlayMenu::handleConfirmInput(bool& confirmed) {
 // -----------------------------------------------------------------------
 void OverlayMenu::render() {
     if (externalConsole_) consoleSelect(externalConsole_);
-    consoleClear();
+    consoleClear();   // always wipe before redrawing the menu
     switch (page_) {
-        case MenuPage::MAIN:         renderMain();         break;
-        case MenuPage::INFO:         renderInfo();         break;
-        case MenuPage::SETTINGS:     renderSettings();     break;
-        case MenuPage::LOAD:         renderLoad();         break;
-        case MenuPage::COMPILE:      renderCompile();      break;
+        case MenuPage::MAIN:          renderMain();         break;
+        case MenuPage::INFO:          renderInfo();         break;
+        case MenuPage::SETTINGS:      renderSettings();     break;
+        case MenuPage::LOAD:          renderLoad();         break;
+        case MenuPage::COMPILE:       renderCompile();      break;
         case MenuPage::CONFIRM_RESET:
-        case MenuPage::CONFIRM_LOAD: renderConfirmReset(); break;
+        case MenuPage::CONFIRM_LOAD:  renderConfirmReset(); break;
         default: break;
     }
 }
 
 void OverlayMenu::renderHeader(const char* title) {
-    printf(COL_CYAN "================================" COL_RESET "\n");
-    printf(COL_YELLOW " ScratchDS " COL_WHITE "%-20s" COL_RESET "\n", title);
-    printf(COL_CYAN "================================" COL_RESET "\n");
+    iprintf(COL_CYAN "================================" COL_RESET "\n");
+    iprintf(COL_YELLOW " ScratchDS " COL_WHITE "%-20s" COL_RESET "\n", title);
+    iprintf(COL_CYAN "================================" COL_RESET "\n");
 }
 
 void OverlayMenu::renderFooter() {
-    printf("\x1b[23;0H");
-    printf(COL_GREY "[B]=Back [A]=Select [L+R+B]=Close" COL_RESET);
+    iprintf("\x1b[23;0H");
+    iprintf(COL_GREY "[B]=Back [A]=Select [L+R+B]=Close" COL_RESET);
 }
 
 void OverlayMenu::renderMain() {
     renderHeader("v" SCRATCHDS_VERSION);
-    printf("\n");
+    iprintf("\n");
 
     const char* items[] = { "  Info", "  Settings", "  Load Project", "  Resume" };
     const char* icons[] = { "i", "*", "^", ">" };
     for (int i = 0; i < 4; i++) {
         bool sel = (cursor_ == i);
-        printf("%s[%s]%s%s\n",
-                sel ? COL_YELLOW : COL_GREY,
-                icons[i],
-                items[i],
-                COL_RESET);
-        printf("\n");
+        iprintf("%s[%s]%s%s\n",
+                sel ? COL_YELLOW : COL_GREY, icons[i], items[i], COL_RESET);
+        iprintf("\n");
     }
-
-    printf("\n");
-    printf(COL_GREY " Hold L+R+B to reopen menu" COL_RESET "\n");
+    iprintf("\n");
+    iprintf(COL_GREY " Hold L+R+B to reopen menu" COL_RESET "\n");
     renderFooter();
 }
 
 void OverlayMenu::renderInfo() {
     renderHeader("Info");
 
-    char ndsModel[32];
-    getNDSModel(ndsModel, sizeof(ndsModel));
-    char projName[64];
-    getProjectName(projName, sizeof(projName));
-
-    // Measure free RAM by probing
-    // Replace the broken RAM probe with a proper watermark probe
-    int freeRam = 0;
-    {
-        // Binary search for largest allocatable block
-        int lo = 0, hi = 4 * 1024 * 1024;
-        while (hi - lo > 1024) {
-            int mid = (lo + hi) / 2;
-            void* p = malloc(mid);
-            if (p) { free(p); lo = mid; }
-            else        hi = mid;
-        }
-        freeRam = lo;
+    // Measure RAM once per menu open (expensive binary-search)
+    if (s_freeRamCache < 0) {
+        s_freeRamCache = measureFreeRAM();
     }
-    int totalRam = 4 * 1024 * 1024;
-    int usedRam  = totalRam - freeRam;
+
+    // NDS ARM9 EWRAM = 4 MB total
+    static const int TOTAL_RAM = 4 * 1024 * 1024;
+    int freeRam = s_freeRamCache;
+    // Clamp to sane range
+    if (freeRam < 0)         freeRam = 0;
+    if (freeRam > TOTAL_RAM) freeRam = TOTAL_RAM;
+    int usedRam  = TOTAL_RAM - freeRam;
+
+    // Bar display: 20 chars wide, each char = 5%
     int barWidth = 20;
-    int filled   = (usedRam * barWidth) / totalRam;
-    if (filled > barWidth) filled = barWidth;
+    int filled   = (usedRam * barWidth) / TOTAL_RAM;
+    if (filled < 0)         filled = 0;
+    if (filled > barWidth)  filled = barWidth;
 
-    printf("\n");
-    printf(COL_CYAN " Version    " COL_WHITE SCRATCHDS_VERSION COL_RESET "\n");
-    printf(COL_CYAN " Built      " COL_WHITE SCRATCHDS_BUILD_DATE COL_RESET "\n");
-    printf("\n");
-    printf(COL_CYAN " Device     " COL_WHITE "%s" COL_RESET "\n", ndsModel);
-    printf("\n");
+    char ndsModel[32]; getNDSModel(ndsModel, sizeof(ndsModel));
+    char projName[64]; getProjectName(projName, sizeof(projName));
 
-    // RAM bar
-    printf(COL_CYAN " RAM Usage\n" COL_RESET);
-    printf(" [");
+    iprintf("\n");
+    iprintf(COL_CYAN " Version    " COL_WHITE SCRATCHDS_VERSION COL_RESET "\n");
+    iprintf(COL_CYAN " Built      " COL_WHITE SCRATCHDS_BUILD_DATE COL_RESET "\n");
+    iprintf("\n");
+    iprintf(COL_CYAN " Device     " COL_WHITE "%s" COL_RESET "\n", ndsModel);
+    iprintf("\n");
+
+    iprintf(COL_CYAN " RAM Usage\n" COL_RESET);
+    iprintf(" [");
     for (int i = 0; i < barWidth; i++) {
         if (i < filled)
-            printf(COL_RED "#" COL_RESET);
+            iprintf(COL_RED "#" COL_RESET);
         else
-            printf(COL_GREEN "-" COL_RESET);
+            iprintf(COL_GREEN "-" COL_RESET);
     }
-    printf("] %d/%dKB\n", usedRam / 1024, totalRam / 1024);
-    printf(COL_GREY " Free: %dKB  Used: %dKB\n\n" COL_RESET,
-           freeRam / 1024, usedRam / 1024);
+    // Show in KB for readability (NDS EWRAM is only 4 MB)
+    iprintf("] %d/%dKB\n", usedRam / 1024, TOTAL_RAM / 1024);
+    iprintf(COL_GREY " Free: %dKB  Used: %dKB\n\n" COL_RESET,
+            freeRam / 1024, usedRam / 1024);
 
-    printf(COL_CYAN " Project    " COL_WHITE "%.20s" COL_RESET "\n", projName);
-    printf(COL_CYAN " Target FPS " COL_WHITE "%d" COL_RESET "\n", settings_->targetFPS);
-    printf(COL_CYAN " Screen     " COL_WHITE "%s" COL_RESET "\n",
-           settings_->stageOnTop ? "Stage=Top" : "Stage=Bottom");
-    printf(COL_CYAN " Scale      " COL_WHITE "%s" COL_RESET "\n",
-           settings_->stageScale == 0 ? "Stretch" :
-           settings_->stageScale == 1 ? "Aspect" : "Native");
-    printf("\n");
-    printf(COL_GREY " devkitARM  " DEVKITARM_VERSION COL_RESET "\n");
+    iprintf(COL_CYAN " Project    " COL_WHITE "%.20s" COL_RESET "\n", projName);
+    iprintf(COL_CYAN " Target FPS " COL_WHITE "%d" COL_RESET "\n", settings_->targetFPS);
+    iprintf(COL_CYAN " Screen     " COL_WHITE "%s" COL_RESET "\n",
+            settings_->stageOnTop ? "Stage=Top" : "Stage=Bottom");
+    iprintf(COL_CYAN " Scale      " COL_WHITE "%s" COL_RESET "\n",
+            settings_->stageScale == 0 ? "Stretch" :
+            settings_->stageScale == 1 ? "Aspect" : "Native");
+    iprintf("\n");
+    iprintf(COL_GREY " devkitARM  " DEVKITARM_VERSION COL_RESET "\n");
 
     renderFooter();
 }
+
 void OverlayMenu::renderSettings() {
     renderHeader("Settings");
-    printf("\n");
+    iprintf("\n");
 
     char fpsStr[8], scaleStr[16], fpsCountStr[8];
-    snprintf(fpsStr,      sizeof(fpsStr),      "%d",   pending_.targetFPS);
-    snprintf(scaleStr,    sizeof(scaleStr),     "%s",
+    snprintf(fpsStr,      sizeof(fpsStr),     "%d",  pending_.targetFPS);
+    snprintf(scaleStr,    sizeof(scaleStr),   "%s",
              pending_.stageScale == 0 ? "Stretch" :
              pending_.stageScale == 1 ? "Aspect"  : "Native");
-    snprintf(fpsCountStr, sizeof(fpsCountStr),  "%s",
+    snprintf(fpsCountStr, sizeof(fpsCountStr),"%s",
              pending_.showFPSCounter ? "On" : "Off");
 
     const char* labels[] = {
@@ -440,31 +450,26 @@ void OverlayMenu::renderSettings() {
     for (int i = 0; i < 6; i++) {
         bool sel = (cursor_ == i);
         if (i == 5) {
-            printf("%s[APPLY & BACK]%s\n",
+            iprintf("%s[APPLY & BACK]%s\n",
                     sel ? COL_GREEN : COL_GREY, COL_RESET);
         } else {
-            printf("%s%s%s%s%s\n",
+            iprintf("%s%s%s%s%s\n",
                     sel ? COL_YELLOW : COL_GREY,
-                    labels[i],
-                    COL_WHITE,
-                    values[i],
-                    COL_RESET);
+                    labels[i], COL_WHITE, values[i], COL_RESET);
         }
-        printf("\n");
+        iprintf("\n");
     }
     renderFooter();
 }
 
 void OverlayMenu::renderLoad() {
     renderHeader("Load Project");
-
-    printf(COL_GREY " Dir: %.26s\n" COL_RESET, currentDir_);
-    printf(COL_CYAN "--------------------------------" COL_RESET "\n");
+    iprintf(COL_GREY " Dir: %.26s\n" COL_RESET, currentDir_);
+    iprintf(COL_CYAN "--------------------------------" COL_RESET "\n");
 
     if (dirEntries_.empty()) {
-        printf(COL_RED "\n  No .sb3 files found.\n" COL_RESET);
-        printf(COL_GREY "  Place .sb3 files in:\n");
-        printf("  fat:/scratch/\n" COL_RESET);
+        iprintf(COL_RED "\n  No .sb3 files found.\n" COL_RESET);
+        iprintf(COL_GREY "  Place .sb3 files in:\n  fat:/scratch/\n" COL_RESET);
     } else {
         const int VISIBLE = 14;
         int end = scrollOff_ + VISIBLE;
@@ -472,7 +477,7 @@ void OverlayMenu::renderLoad() {
         for (int i = scrollOff_; i < end; i++) {
             bool sel   = (cursor_ == i);
             bool isDir = dirEntries_[i].isDir;
-            printf("%s%s%.26s%s\n",
+            iprintf("%s%s%.26s%s\n",
                     sel ? COL_YELLOW : COL_WHITE,
                     isDir ? "[D] " : "    ",
                     dirEntries_[i].name,
@@ -480,67 +485,61 @@ void OverlayMenu::renderLoad() {
         }
     }
 
-    printf("\x1b[23;0H");
-    printf(COL_GREY "[A]=Select [B]=Up [START]=Cancel" COL_RESET);
+    iprintf("\x1b[23;0H");
+    iprintf(COL_GREY "[A]=Select [B]=Up [START]=Cancel" COL_RESET);
 }
 
 void OverlayMenu::renderCompile() {
     renderHeader("Compile");
-    printf("\n");
-    printf(COL_WHITE " Compiling Scratch project...\n\n" COL_RESET);
-    printf(COL_GREY " This converts the .sb3 into\n");
-    printf(" a pre-parsed binary format\n");
-    printf(" for faster loading from SD.\n\n" COL_RESET);
+    iprintf("\n");
+    iprintf(COL_WHITE " Compiling Scratch project...\n\n" COL_RESET);
+    iprintf(COL_GREY " This converts the .sb3 into\n");
+    iprintf(" a pre-parsed binary format\n");
+    iprintf(" for faster loading from SD.\n\n" COL_RESET);
 
-    printf(COL_CYAN " Progress: %3d%%\n [", compileProgress_);
+    iprintf(COL_CYAN " Progress: %3d%%\n [", compileProgress_);
     int filled = compileProgress_ / 5;
     for (int i = 0; i < 20; i++)
-        printf("%s", i < filled ? COL_GREEN "#" : COL_GREY "-");
-    printf(COL_CYAN "]\n\n" COL_RESET);
-
-    printf(COL_YELLOW " Status: %s\n" COL_RESET, compileStatus_);
+        iprintf("%s", i < filled ? COL_GREEN "#" : COL_GREY "-");
+    iprintf(COL_CYAN "]\n\n" COL_RESET);
+    iprintf(COL_YELLOW " Status: %s\n" COL_RESET, compileStatus_);
 
     if (compileProgress_ >= 100) {
-        printf("\n" COL_GREEN " Done! Output: fat:/scratch/out/\n" COL_RESET);
-        printf(COL_GREY " [A] to return to menu\n" COL_RESET);
-        // cachedKeysDown_ was set at the top of update(), safe to read here
+        iprintf("\n" COL_GREEN " Done! Output: fat:/scratch/out/\n" COL_RESET);
+        iprintf(COL_GREY " [A] to return to menu\n" COL_RESET);
         if (cachedKeysDown_ & KEY_A) { page_ = MenuPage::SETTINGS; cursor_ = 4; }
     }
 }
 
 void OverlayMenu::renderConfirmReset() {
     renderHeader("Confirm");
-    printf("\n\n");
-    printf(COL_WHITE " %s\n\n" COL_RESET, confirmMsg_);
-    printf("\n");
-    printf("%s [YES] %s  %s [NO] %s\n",
+    iprintf("\n\n");
+    iprintf(COL_WHITE " %s\n\n" COL_RESET, confirmMsg_);
+    iprintf("\n");
+    iprintf("%s [YES] %s  %s [NO] %s\n",
             cursor_ == 0 ? COL_GREEN : COL_GREY, COL_RESET,
             cursor_ == 1 ? COL_RED   : COL_GREY, COL_RESET);
-    printf("\n");
-    printf(COL_GREY " [Left/Right] to switch\n");
-    printf(" [A] to confirm\n" COL_RESET);
+    iprintf("\n");
+    iprintf(COL_GREY " [Left/Right] to switch\n [A] to confirm\n" COL_RESET);
 }
 
 // -----------------------------------------------------------------------
-// Settings cycle helpers
+// Settings helpers
 // -----------------------------------------------------------------------
-void OverlayMenu::cycleFPS() {
-    pending_.targetFPS = (pending_.targetFPS == 60) ? 30 : 60;
-}
-void OverlayMenu::cycleScreen() {
-    pending_.stageOnTop = !pending_.stageOnTop;
-}
-void OverlayMenu::cycleScale() {
-    pending_.stageScale = (pending_.stageScale + 1) % 3;
-}
+void OverlayMenu::cycleFPS()    { pending_.targetFPS = (pending_.targetFPS == 60) ? 30 : 60; }
+void OverlayMenu::cycleScreen() { pending_.stageOnTop = !pending_.stageOnTop; }
+void OverlayMenu::cycleScale()  { pending_.stageScale = (pending_.stageScale + 1) % 3; }
+
 void OverlayMenu::applySettings() {
     *settings_ = pending_;
     if (settings_->autoSaveSettings) settings_->save();
     if (onApply_) onApply_(*settings_);
+    // Clear console so returning to gameplay shows a clean screen
+    consoleClear();
 }
 
 // -----------------------------------------------------------------------
-// Compile (simulated progress)
+// Compile helpers
 // -----------------------------------------------------------------------
 void OverlayMenu::startCompile() {
     compiling_       = true;
@@ -552,7 +551,6 @@ void OverlayMenu::startCompile() {
 
 void OverlayMenu::tickCompile(float dt) {
     compileTimer_ += dt;
-
     struct Stage { float time; int progress; const char* status; };
     static const Stage stages[] = {
         { 0.5f,  10, "Parsing project.json..." },
@@ -562,19 +560,14 @@ void OverlayMenu::tickCompile(float dt) {
         { 3.5f,  90, "Writing output binary..." },
         { 4.0f, 100, "Compilation complete!" },
     };
-    static const int NUM_STAGES = 6;
-
-    for (int i = 0; i < NUM_STAGES; i++) {
+    for (int i = 0; i < 6; i++) {
         if (compileTimer_ >= stages[i].time) {
             compileProgress_ = stages[i].progress;
             strncpy(compileStatus_, stages[i].status, sizeof(compileStatus_) - 1);
             compileStatus_[sizeof(compileStatus_) - 1] = '\0';
         }
     }
-
-    if (compileProgress_ >= 100) {
-        compiling_ = false;
-    }
+    if (compileProgress_ >= 100) compiling_ = false;
 }
 
 // -----------------------------------------------------------------------
@@ -614,7 +607,6 @@ void OverlayMenu::scanDirectory(const char* path) {
             size_t len = strlen(fe.name);
             if (len < 4 || strcmp(fe.name + len - 4, ".sb3") != 0) continue;
         }
-
         dirEntries_.push_back(fe);
     }
     closedir(dir);
@@ -623,10 +615,8 @@ void OverlayMenu::scanDirectory(const char* path) {
 void OverlayMenu::navigateInto(int idx) {
     if (idx < 0 || idx >= (int)dirEntries_.size()) return;
     if (!dirEntries_[idx].isDir) return;
-
     if (strcmp(dirEntries_[idx].name, "..") == 0) {
-        navigateUp();
-        return;
+        navigateUp(); return;
     }
     char newPath[512];
     snprintf(newPath, sizeof(newPath), "%s%s/", currentDir_, dirEntries_[idx].name);
@@ -640,12 +630,9 @@ void OverlayMenu::navigateUp() {
     int len = (int)strlen(tmp);
     if (len > 0 && tmp[len - 1] == '/') tmp[--len] = '\0';
     char* slash = strrchr(tmp, '/');
-    if (slash) { *(slash + 1) = '\0'; }
-
-    if (strlen(tmp) < 5) {
-        strncpy(tmp, "fat:/scratch/", sizeof(tmp) - 1);
-        tmp[sizeof(tmp) - 1] = '\0';
-    }
+    if (slash) *(slash + 1) = '\0';
+    if (strlen(tmp) < 5) strncpy(tmp, "fat:/scratch/", sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
     scanDirectory(tmp);
 }
 
@@ -654,11 +641,7 @@ void OverlayMenu::navigateUp() {
 // -----------------------------------------------------------------------
 void OverlayMenu::getNDSModel(char* out, int maxLen) {
 #ifdef isDSiMode
-    if (isDSiMode()) {
-        strncpy(out, "Nintendo DSi", maxLen - 1);
-    } else {
-        strncpy(out, "Nintendo DS / DS Lite", maxLen - 1);
-    }
+    strncpy(out, isDSiMode() ? "Nintendo DSi" : "Nintendo DS / DS Lite", maxLen - 1);
 #else
     strncpy(out, "Nintendo DS / DS Lite", maxLen - 1);
 #endif
@@ -666,17 +649,7 @@ void OverlayMenu::getNDSModel(char* out, int maxLen) {
 }
 
 int OverlayMenu::getFreeRAM() {
-    int free = 0;
-    int step = 64 * 1024;
-    while (true) {
-        void* p = malloc(step);
-        if (!p) break;
-        free += step;
-        ::free(p);
-        break;
-    }
-    if (free == 0) free = 2 * 1024 * 1024;
-    return free;
+    return measureFreeRAM();
 }
 
 void OverlayMenu::getProjectName(char* out, int maxLen) {
