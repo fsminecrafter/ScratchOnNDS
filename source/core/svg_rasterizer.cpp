@@ -662,8 +662,16 @@ static bool rasterizeCore(const char* svg, size_t svgLen, SvgImage& out, int dst
     if (vw == 0) {
         const char* wp = strstr(svg, "width=");
         const char* hp = strstr(svg, "height=");
-        if (wp) { wp = strchr(wp,'"')||strchr(wp,'\''); if(wp) vw=(float)atof(wp+1); }
-        if (hp) { hp = strchr(hp,'"')||strchr(hp,'\''); if(hp) vh=(float)atof(hp+1); }
+        if (wp) {
+            const char* wpq = strchr(wp, '"');
+            if (!wpq) wpq = strchr(wp, '\'');
+            if (wpq) vw = (float)atof(wpq + 1);
+        }
+        if (hp) {
+            const char* hpq = strchr(hp, '"');
+            if (!hpq) hpq = strchr(hp, '\'');
+            if (hpq) vh = (float)atof(hpq + 1);
+        }
     }
     if (vw <= 0) vw = 480; // Scratch default stage width
     if (vh <= 0) vh = 360;
