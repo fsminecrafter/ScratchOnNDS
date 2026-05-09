@@ -740,20 +740,22 @@ static bool rasterizeCore(const char* svg, size_t svgLen, SvgImage& out, int dst
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 bool svgRasterize(const char* path, SvgImage& out, int dstW, int dstH) {
-    FILE* f = fopen(path, "rb");
-    if (!f) { out.ok=false; return false; }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f); fseek(f, 0, SEEK_SET);
-    if (sz <= 0 || sz > 1<<20) { fclose(f); out.ok=false; return false; }
-    char* buf = (char*)malloc(sz+1);
-    if (!buf) { fclose(f); out.ok=false; return false; }
-    fread(buf, 1, sz, f); fclose(f);
-    buf[sz] = '\0';
-    bool r = rasterizeCore(buf, (size_t)sz, out, dstW, dstH);
-    free(buf);
-    return r;
+    // SVG rasterization is too slow for NDS ARM9 at load time.
+    // Render a placeholder pink square instead.
+    if (dstW > SVG_MAX_W) dstW = SVG_MAX_W;
+    if (dstH > SVG_MAX_H) dstH = SVG_MAX_H;
+    out.width    = dstW;
+    out.height   = dstH;
+    out.palCount = 2;
+    out.ok       = true;
+    memset(out.pixels, 1, sizeof(out.pixels));   // all index 1
+    out.palette[0] = 0;                           // transparent
+    out.palette[1] = (uint16_t)((31) | (0<<5) | (31<<10)); // pink RGB555
+    return true;
 }
 
-bool svgRasterizeString(const char* svgData, size_t len, SvgImage& out, int dstW, int dstH) {
-    return rasterizeCore(svgData, len, out, dstW, dstH);
+bool svgRasterizeString(const char* svgData, size_t len,
+                        SvgImage& out, int dstW, int dstH) {
+    (void)svgData; (void)len;
+    return svgRasterize(nullptr, out, dstW, dstH);
 }
