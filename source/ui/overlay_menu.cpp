@@ -361,17 +361,20 @@ void OverlayMenu::renderInfo() {
     getProjectName(projName, sizeof(projName));
 
     // Measure free RAM by probing
+    // Replace the broken RAM probe with a proper watermark probe
     int freeRam = 0;
-    int totalRam = 4 * 1024 * 1024; // NDS ARM9 has 4MB main RAM
     {
-        // Try allocating in halving steps to estimate free heap
-        int probe = 2 * 1024 * 1024;
-        while (probe >= 1024) {
-            void* p = malloc(probe);
-            if (p) { freeRam += probe; free(p); break; }
-            probe /= 2;
+        // Binary search for largest allocatable block
+        int lo = 0, hi = 4 * 1024 * 1024;
+        while (hi - lo > 1024) {
+            int mid = (lo + hi) / 2;
+            void* p = malloc(mid);
+            if (p) { free(p); lo = mid; }
+            else        hi = mid;
         }
+        freeRam = lo;
     }
+    int totalRam = 4 * 1024 * 1024;
     int usedRam  = totalRam - freeRam;
     int barWidth = 20;
     int filled   = (usedRam * barWidth) / totalRam;
