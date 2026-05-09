@@ -246,10 +246,11 @@ struct ScratchSprite {
 // Helper: find a block by id inside a sprite
 // -----------------------------------------------------------------------
 inline ScratchBlock* findBlock(ScratchSprite& sprite, const std::string& id) {
-    auto it = sprite.blocks.find(id);
-    return (it != sprite.blocks.end()) ? &it->second : nullptr;
+    for (auto& b : sprite.blocks) {
+        if (b.id == id) return &b;
+    }
+    return nullptr;
 }
-
 // -----------------------------------------------------------------------
 // Top-level project
 // -----------------------------------------------------------------------
