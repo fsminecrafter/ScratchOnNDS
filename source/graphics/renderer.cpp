@@ -22,6 +22,9 @@
 #define BG_BITMAP_VRAM ((uint8_t*)0x06000000)  // VRAM bank A mapped as main BG
 #define BG_PAL_MAIN    ((uint16_t*)0x05000000)  // BG palette RAM (256 entries)
 
+static uint16_t sharedSpritePal[SHARED_PAL_SIZE];
+static int      sharedPalCount;
+
 // -----------------------------------------------------------------------
 // Init renderer state
 // -----------------------------------------------------------------------
