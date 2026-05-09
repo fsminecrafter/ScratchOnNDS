@@ -16,6 +16,10 @@
 // project.h but never call jsmn functions directly (vm.cpp, renderer.cpp,
 // audio_manager.cpp, etc.).
 
+struct jsmntok_t;
+
+#define MAX_SPRITES 16
+
 // -----------------------------------------------------------------------
 // Asset references (resolved to file paths after extraction)
 // -----------------------------------------------------------------------
@@ -266,7 +270,8 @@ struct ScratchMeta {
 
 struct ScratchProject {
     ScratchMeta meta;
-    std::vector<ScratchSprite> targets;
+    ScratchSprite targets[MAX_SPRITES];
+    int           targetCount;
     std::map<std::string, std::string>     broadcasts;
     std::map<std::string, ScratchVariable> globalVars;
 
