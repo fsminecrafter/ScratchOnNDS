@@ -208,8 +208,7 @@ private:
     static constexpr float COMBO_HOLD_REQUIRED = 0.4f;
 
     // NDS console handle for menu (top screen)
-    PrintConsole menuConsole_;
-    bool         consoleInited_;
+    PrintConsole* externalConsole_;
 
     // Callbacks
     ApplyCallback onApply_;
