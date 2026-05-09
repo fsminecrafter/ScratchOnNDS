@@ -164,23 +164,12 @@ bool OverlayMenu::update(float dt) {
 }
 
 void OverlayMenu::open() {
-    open_    = true;
-    page_    = MenuPage::MAIN;
-    cursor_  = 0;
+    open_      = true;
+    page_      = MenuPage::MAIN;
+    cursor_    = 0;
     scrollOff_ = 0;
-    pending_ = *settings_;
-
-    if (!consoleInited_) {
-        // Menu lives on the top (main) screen, BG layer 0
-        consoleInit(&menuConsole_, 0, BgType_Text4bpp, BgSize_T_256x256,
-                    31, 0, true, true);
-        consoleInited_ = true;
-    }
-    consoleSelect(&menuConsole_);
-}
-
-void OverlayMenu::close() {
-    open_ = false;
+    pending_   = *settings_;
+    // Console is set externally via setConsole() — nothing to init here
 }
 
 // -----------------------------------------------------------------------
