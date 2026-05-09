@@ -2,7 +2,7 @@
 // renderer.cpp — Updated with SVG rasterization and proper backdrop rendering
 // =============================================================================
 #include "renderer.h"
-#include "svg_rasterizer.h"
+#include "../core/svg_rasterizer.h"
 #include "../input/input_handler.h"
 #include <nds.h>
 #include <string.h>
