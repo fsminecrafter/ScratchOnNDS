@@ -1,8 +1,10 @@
 // =============================================================================
 // project.cpp — Parses Scratch 3.0 project.json using jsmn
 // =============================================================================
+#define JSMN_STATIC
+#include "jsmn.h"
+
 #include "project.h"
-#include "jsmn.h"   // drop jsmn.h into project (single header tokenizer)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
