@@ -304,7 +304,7 @@ void Renderer::renderUI(ScratchProject& project, InputHandler& input) {
     for (auto& sprite : project.targets) {
         for (auto& var : sprite.variables) {
             if (var.visible && shown < 16) {
-                iprintf("%-10s: %s\n",
+                printf("%-10s: %s\n",
                     var.name.substr(0, 10).c_str(),
                     var.value.substr(0, 12).c_str());
                 shown++;
