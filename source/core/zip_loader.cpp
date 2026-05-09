@@ -12,7 +12,11 @@
 
 // Pull in miniz — define the implementation exactly once here.
 #define MINIZ_IMPLEMENTATION
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
 #include "miniz.h"
+#pragma GCC diagnostic pop
 
 bool ZipLoader::extract(const char* zipPath, const char* destDir) {
     mz_zip_archive zip;
