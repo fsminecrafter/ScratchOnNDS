@@ -366,32 +366,58 @@ void OverlayMenu::renderInfo() {
 
     char ndsModel[32];
     getNDSModel(ndsModel, sizeof(ndsModel));
-    int freeRam = getFreeRAM();
     char projName[64];
     getProjectName(projName, sizeof(projName));
+
+    // Measure free RAM by probing
+    int freeRam = 0;
+    int totalRam = 4 * 1024 * 1024; // NDS ARM9 has 4MB main RAM
+    {
+        // Try allocating in halving steps to estimate free heap
+        int probe = 2 * 1024 * 1024;
+        while (probe >= 1024) {
+            void* p = malloc(probe);
+            if (p) { freeRam += probe; free(p); break; }
+            probe /= 2;
+        }
+    }
+    int usedRam  = totalRam - freeRam;
+    int barWidth = 20;
+    int filled   = (usedRam * barWidth) / totalRam;
+    if (filled > barWidth) filled = barWidth;
 
     printf("\n");
     printf(COL_CYAN " Version    " COL_WHITE SCRATCHDS_VERSION COL_RESET "\n");
     printf(COL_CYAN " Built      " COL_WHITE SCRATCHDS_BUILD_DATE COL_RESET "\n");
     printf("\n");
     printf(COL_CYAN " Device     " COL_WHITE "%s" COL_RESET "\n", ndsModel);
-    printf(COL_CYAN " Free RAM   " COL_WHITE "%d KB" COL_RESET "\n", freeRam / 1024);
     printf("\n");
+
+    // RAM bar
+    printf(COL_CYAN " RAM Usage\n" COL_RESET);
+    printf(" [");
+    for (int i = 0; i < barWidth; i++) {
+        if (i < filled)
+            printf(COL_RED "#" COL_RESET);
+        else
+            printf(COL_GREEN "-" COL_RESET);
+    }
+    printf("] %d/%dKB\n", usedRam / 1024, totalRam / 1024);
+    printf(COL_GREY " Free: %dKB  Used: %dKB\n\n" COL_RESET,
+           freeRam / 1024, usedRam / 1024);
+
     printf(COL_CYAN " Project    " COL_WHITE "%.20s" COL_RESET "\n", projName);
     printf(COL_CYAN " Target FPS " COL_WHITE "%d" COL_RESET "\n", settings_->targetFPS);
     printf(COL_CYAN " Screen     " COL_WHITE "%s" COL_RESET "\n",
-            settings_->stageOnTop ? "Stage=Top" : "Stage=Bottom");
+           settings_->stageOnTop ? "Stage=Top" : "Stage=Bottom");
     printf(COL_CYAN " Scale      " COL_WHITE "%s" COL_RESET "\n",
-            settings_->stageScale == 0 ? "Stretch" :
-            settings_->stageScale == 1 ? "Aspect" : "Native");
+           settings_->stageScale == 0 ? "Stretch" :
+           settings_->stageScale == 1 ? "Aspect" : "Native");
     printf("\n");
     printf(COL_GREY " devkitARM  " DEVKITARM_VERSION COL_RESET "\n");
-    printf(COL_GREY " libnds     " "2.x" COL_RESET "\n");
-    printf(COL_GREY " maxmod     " "1.x" COL_RESET "\n");
 
     renderFooter();
 }
-
 void OverlayMenu::renderSettings() {
     renderHeader("Settings");
     printf("\n");
