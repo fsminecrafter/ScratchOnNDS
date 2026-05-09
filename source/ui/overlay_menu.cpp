@@ -169,7 +169,10 @@ void OverlayMenu::open() {
     cursor_    = 0;
     scrollOff_ = 0;
     pending_   = *settings_;
-    // Console is set externally via setConsole() — nothing to init here
+}
+
+void OverlayMenu::close() {
+    open_ = false;
 }
 
 // -----------------------------------------------------------------------
