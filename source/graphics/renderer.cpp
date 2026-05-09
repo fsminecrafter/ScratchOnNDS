@@ -323,27 +323,23 @@ bool Renderer::loadPng(const char* path, uint16_t** outGfx, uint16_t** outPal,
                         int* outW, int* outH) {
     FILE* f = fopen(path, "rb");
     if (!f) return false;
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f); fseek(f, 0, SEEK_SET);
-    uint8_t* raw = (uint8_t*)malloc(sz);
-    if (!raw) { fclose(f); return false; }
-    fread(raw, 1, sz, f); fclose(f);
 
-    // With lodepng this would be a full decode.
-    // For now: 32×32 placeholder using first 3 bytes as colour hint
-    *outW   = 32; *outH   = 32;
-    *outGfx = (uint16_t*)malloc(32 * 32 + 1);
+    // Read just enough for the colour hint — no full file load
+    uint8_t header[51];
+    size_t got = fread(header, 1, sizeof(header), f);
+    fclose(f);
+
+    *outW   = 32; *outH = 32;
+    *outGfx = (uint16_t*)malloc(32 * 32);
     *outPal = (uint16_t*)calloc(256, 2);
-    if (*outGfx && *outPal) {
-        memset(*outGfx, 1, 32 * 32);
-        (*outPal)[0] = 0;
-        // Sample first pixel (offset 0x1a for typical PNG IDAT)
-        uint8_t r=128, g=128, b=200;
-        if (sz > 50) { r=raw[20]; g=raw[21]; b=raw[22]; }
-        (*outPal)[1] = (uint16_t)RGB15(r>>3, g>>3, b>>3);
-    }
-    free(raw);
-    return (*outGfx != nullptr);
+    if (!*outGfx || !*outPal) { free(*outGfx); free(*outPal); return false; }
+
+    memset(*outGfx, 1, 32 * 32);
+    (*outPal)[0] = 0;
+    uint8_t r = 128, g = 128, b = 200;
+    if (got > 22) { r = header[20]; g = header[21]; b = header[22]; }
+    (*outPal)[1] = (uint16_t)RGB15(r >> 3, g >> 3, b >> 3);
+    return true;
 }
 
 // -----------------------------------------------------------------------
