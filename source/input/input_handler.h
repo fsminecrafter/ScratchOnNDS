@@ -1,13 +1,10 @@
 // =============================================================================
-// input_handler.h / input_handler.cpp
-// Handles all NDS inputs: buttons, D-pad, touchscreen, microphone
-// Maps NDS keys to Scratch key names and NDS extension opcodes
+// input_handler.h — Fixed: proper edge detection for hat blocks
 // =============================================================================
 #pragma once
 #include <nds.h>
 #include <string>
 
-// Microphone sample rate
 #define MIC_SAMPLE_RATE  8000
 #define MIC_BUFFER_SIZE  512
 
@@ -19,60 +16,55 @@ public:
     }
 
     void init();
-    void update();  // call once per frame — calls scanKeys() exactly once
+    void update();  // call ONCE per frame — owns the single scanKeys() call
 
-    // ---- Button queries (for Scratch "key pressed?" sensing) ----
-    // keyName: "space", "up arrow", "down arrow", "left arrow", "right arrow",
-    //          "a"..."z", "0"..."9", "any"
-    // NDS keys additionally: "A", "B", "X", "Y", "L", "R", "start", "select"
-    bool isKeyDown(const std::string& keyName);
-    bool isKeyHeld(const std::string& keyName);
-    bool isKeyUp(const std::string& keyName);   // released this frame
+    // ---- Scratch key sensing ----
+    bool isKeyDown(const std::string& keyName);   // just pressed this frame
+    bool isKeyHeld(const std::string& keyName);   // held (includes first frame)
+    bool isKeyUp(const std::string& keyName);     // released this frame
 
-    // ---- NDS extension button queries (raw button name) ----
-    bool isButtonDown(const std::string& btn);      // pressed this frame
-    bool isButtonHeld(const std::string& btn);      // held
-    bool isButtonReleased(const std::string& btn);  // released this frame
+    // ---- NDS extension button queries ----
+    bool isButtonDown(const std::string& btn);     // just pressed (edge)
+    bool isButtonHeld(const std::string& btn);     // held
+    bool isButtonReleased(const std::string& btn); // just released (edge)
 
-    // ---- Raw cached key masks ----------------------------------------
-    // Use these instead of calling scanKeys()/keysDown()/keysHeld()
-    // yourself — there must be only ONE scanKeys() call per frame
-    // (performed inside InputHandler::update()).
-    u32 getKeysDown() const { return keysDownMask; }
-    u32 getKeysHeld() const { return keysHeldMask; }
-    u32 getKeysUp()   const { return keysUpMask;   }
+    // ---- Raw cached masks (read-only, set by update()) ----
+    u32 getKeysDown() const { return keysDownMask; }  // just-pressed edges
+    u32 getKeysHeld() const { return keysHeldMask; }  // all currently held
+    u32 getKeysUp()   const { return keysUpMask;   }  // just-released edges
 
     // ---- Touchscreen ----
-    bool isTouching();
-    int  getTouchX();   // Scratch coords: -240 to 240
-    int  getTouchY();   // Scratch coords: -160 to 160 (inverted)
-    int  getTouchRawX(); // 0-255
-    int  getTouchRawY(); // 0-191
+    bool isTouching() const { return touching; }
+    int  getTouchX() const;
+    int  getTouchY() const;
+    int  getTouchRawX() const { return touching ? touchPos.px : -1; }
+    int  getTouchRawY() const { return touching ? touchPos.py : -1; }
 
     // ---- Microphone ----
-    int  getMicLoudness();   // 0-100 (Scratch-compatible loudness %)
-    bool isMicActive();
+    int  getMicLoudness();
+    bool isMicActive() const { return micActive; }
     void startMicRecording();
     void stopMicRecording();
 
-    // ---- Scratch key name from NDS key mask ----
     std::string keyMaskToScratchName(u32 mask);
 
 private:
     InputHandler() {}
 
-    u32  keysDownMask;
-    u32  keysHeldMask;
-    u32  keysUpMask;
+    // keysDownMask  = bits SET this frame that were CLEAR last frame  (just-pressed)
+    // keysHeldMask  = bits SET this frame regardless of last frame    (held)
+    // keysUpMask    = bits CLEAR this frame that were SET  last frame (just-released)
+    u32 keysDownMask;
+    u32 keysHeldMask;
+    u32 keysUpMask;
 
     bool touching;
     touchPosition touchPos;
 
-    // Mic
     bool micActive;
     s16  micBuffer[MIC_BUFFER_SIZE];
     int  micLoudness;
 
-    u32  nameToMask(const std::string& name);
+    u32 nameToMask(const std::string& name) const;
     void updateMic();
 };
