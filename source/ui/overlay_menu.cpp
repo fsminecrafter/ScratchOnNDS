@@ -559,18 +559,3 @@ void OverlayMenu::getProjectName(char* out, int maxLen) {
     }
     out[maxLen-1] = '\0';
 }
-
-void OverlayMenu::getProjectName(char* out, int maxLen) {
-    if (settings_->lastProjectPath[0] != '\0') {
-        const char* slash = strrchr(settings_->lastProjectPath, '/');
-        const char* name  = slash ? slash + 1 : settings_->lastProjectPath;
-        strncpy(out, name, maxLen - 1);
-    } else {
-        strncpy(out, "(example.sb3)", maxLen - 1);
-    }
-    out[maxLen - 1] = '\0';
-}
-
-void OverlayMenu::consoleClear() {
-    ::consoleClear();
-}
