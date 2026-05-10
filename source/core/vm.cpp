@@ -134,39 +134,35 @@ void ScratchVM::executeThread(ScriptThread& thread, double dt) {
         ScratchValue result = executeBlock(thread, thread.currentBlockId, yielded);
         thread.stepsThisFrame++;
 
-        if (yielded) break; // yield until next frame
+        if (yielded) break;
 
-        // Advance to next block in sequence
         ScratchBlock* b = getBlock(thread, thread.currentBlockId);
+
         if (b && !b->nextId.empty()) {
             thread.currentBlockId = b->nextId;
-        } else {
-            // End of sequence — pop call stack or finish
+        } 
+        else {
+            // ---- LOOP HANDLING FIX ----
             if (!thread.callStack.empty()) {
-                auto frame = thread.callStack.back();
-                thread.callStack.pop_back();
-                thread.currentBlockId = frame.blockId;
+                auto &frame = thread.callStack.back();
 
-                if (!thread.callStack.empty()) {
-                    auto& frame = thread.callStack.back();
-                
-                    if (frame.remaining > 0) frame.remaining--;
-                
-                    if (frame.remaining == 0) {
-                        thread.callStack.pop_back();
-                        thread.currentBlockId = frame.returnBlockId;
-                    } else {
-                        thread.currentBlockId = frame.returnBlockId;
+                if (frame.remaining > 0) frame.remaining--;
+
+                if (frame.remaining == 0) {
+                    thread.callStack.pop_back();
+
+                    if (!thread.callStack.empty()) {
+                        thread.currentBlockId = thread.callStack.back().returnBlockId;
                     }
-                
-                    yielded = true;
-                    return;
+                } else {
+                    thread.currentBlockId = frame.returnBlockId;
                 }
-                
-            } else {
-                thread.state = ScriptThread::DONE;
-                break;
+
+                continue;
             }
+
+            thread.state = ScriptThread::DONE;
+            break;
         }
     }
 }
@@ -189,35 +185,34 @@ ScratchValue ScratchVM::executeBlock(ScriptThread& thread,
         case BlockOpcode::MOTION_MOVESTEPS: {
             double steps = evaluateInput(thread, b->inputs.at("STEPS")).toNum();
         
-            double angle = thread.sprite->direction;
-            double rad = (angle - 90.0) * M_PI / 180.0;
+            double rad = thread.sprite->direction * M_PI / 180.0;
         
-            thread.sprite->x += cos(rad) * steps;
-            thread.sprite->y += sin(rad) * steps;
-
+            thread.sprite->x += sin(rad) * steps;
+            thread.sprite->y += cos(rad) * steps;
+        
             if (!std::isfinite(thread.sprite->x)) thread.sprite->x = 0;
             if (!std::isfinite(thread.sprite->y)) thread.sprite->y = 0;
-            
+        
             break;
         }
         case BlockOpcode::MOTION_TURNRIGHT: {
             double deg = evaluateInput(thread, b->inputs.at("DEGREES")).toNum();
             thread.sprite->direction += deg;
-
-            if (thread.sprite->direction >= 360.0)
-                thread.sprite->direction -= 360.0;
-            if (thread.sprite->direction < 0.0)
+        
+            thread.sprite->direction = fmod(thread.sprite->direction, 360.0);
+            if (thread.sprite->direction < 0)
                 thread.sprite->direction += 360.0;
+        
             break;
         }
         case BlockOpcode::MOTION_TURNLEFT: {
             double deg = evaluateInput(thread, b->inputs.at("DEGREES")).toNum();
             thread.sprite->direction -= deg;
-
-            if (thread.sprite->direction >= 360.0)
+        
+            thread.sprite->direction = fmod(thread.sprite->direction, 360.0);
+            if (thread.sprite->direction < 0)
                 thread.sprite->direction += 360.0;
-            if (thread.sprite->direction < 0.0)
-                thread.sprite->direction -= 360.0;
+        
             break;
         }
         case BlockOpcode::MOTION_GOTOXY: {
@@ -575,7 +570,12 @@ ScratchValue ScratchVM::evaluateInput(ScriptThread& thread,
 ScratchValue ScratchVM::evaluateReporter(ScriptThread& thread,
                                           const std::string& blockId) {
     bool yielded = false;
-    return executeBlock(thread, blockId, yielded);
+    ScratchValue v = executeBlock(thread, blockId, yielded);
+
+    // prevent reporter from affecting execution state
+    thread.state = ScriptThread::RUNNING;
+
+    return v;
 }
 
 // -----------------------------------------------------------------------
