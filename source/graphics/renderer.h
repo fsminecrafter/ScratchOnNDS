@@ -54,7 +54,8 @@ private:
     void loadCostume(ScratchCostume& costume, const char* extractDir,
                      const std::string& format);
     bool loadPng(const char* path, uint16_t** outGfx, uint16_t** outPal,
-                 int* outW, int* outH);
+                 int* outW, int* outH,
+                 int maxW = 64, int maxH = 64);
 
     // maxW/maxH: maximum output pixel dimensions (64 for sprites, 256×192 for backdrops)
     bool loadBmp(const char* path, uint16_t** outGfx, uint16_t** outPal,
