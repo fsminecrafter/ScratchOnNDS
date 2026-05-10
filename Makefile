@@ -60,8 +60,7 @@ CFLAGS      := -g -Wall -O2 -fomit-frame-pointer \
                -DSCRATCHDS_BUILD_DATE=\"$(BUILD_DATE)\" \
                -DDEVKITARM_VERSION=\"$(DEVKITARM_VER)\"
 
-CXXFLAGS    := $(CFLAGS) -DJSMN_STATIC -fno-rtti -fno-exceptions -std=c++14 -DLODEPNG_NO_COMPILE_ENCODER -DLODEPNG_NO_COMPILE_ANCILLARY_CHUNKS -DLODEPNG_NO_COMPILE_CPP
-
+CXXFLAGS    := $(CFLAGS) -DJSMN_STATIC -fno-rtti -fno-exceptions -std=c++14 -DLODEPNG_NO_COMPILE_ENCODER -DLODEPNG_NO_COMPILE_ANCILLARY_CHUNKS
 ASFLAGS     := -g $(ARCH)
 
 LDFLAGS     := -specs=ds_arm9.specs -g -Wl,-Map,$(notdir $*.map)
