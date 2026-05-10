@@ -1,28 +1,30 @@
 // =============================================================================
-// renderer.h — Fixed: clearBottomConsole, loadBmp signature, backdrop flag
+// renderer.h
+// Global palette: 256 OAM palette entries shared across all sprites.
+// Each costume is assigned a 16-color slot (max 16 sprites).
+// Costumes that need more than 16 colors are quantized down during load.
+// This eliminates the per-costume palette upload that was overwriting previous
+// sprites' colors every frame.
 // =============================================================================
 #pragma once
 #include "../core/project.h"
 #include <nds.h>
 
-#define MAX_OAM_SPRITES 128
-#define MAX_GFX_SLOTS   64
-#define SHARED_PAL_SIZE 256
+#define MAX_OAM_SPRITES    128
+#define MAX_GFX_SLOTS      64
+
+// Global palette layout: 256 entries split into 16-color slots.
+// Slot 0 is reserved (index 0 = transparent in every slot).
+// Slots 1–15 are for costumes (15 unique palettes × 16 colors).
+#define PAL_COLORS_PER_SLOT  16
+#define PAL_MAX_SLOTS        16   // 16 × 16 = 256 entries
+#define PAL_SLOT_UNASSIGNED  0xFF
 
 // Scratch stage 480×360 → NDS top screen 256×192
 #define STAGE_SCALE_X (256.0 / 480.0)
 #define STAGE_SCALE_Y (192.0 / 360.0)
 #define NDS_CENTER_X 128
 #define NDS_CENTER_Y 96
-
-struct SpriteSlot {
-    bool      used;
-    int       oamIndex;
-    uint16_t* gfxVram;
-    uint16_t* palVram;
-    int       width, height;
-    SpriteSize oamSize;
-};
 
 class Renderer {
 public:
@@ -33,36 +35,41 @@ public:
 
     void init();
 
-    // Load all costume assets from SD into VRAM
     void loadSprites(ScratchProject& project);
-
-    // Draw one frame (call during VBlank)
     void renderFrame(ScratchProject& project);
-
-    // Draw UI on bottom screen — clears fully before writing
     void renderUI(ScratchProject& project, class InputHandler& input);
-
-    // Explicitly clear bottom console (call when menu opens/closes)
     void clearBottomConsole();
 
-    // Expose sub-screen console so main.cpp / overlay_menu can select it
     PrintConsole* getBottomConsole() { return &bottomConsole; }
 
 private:
     Renderer() {}
 
+    // ---- Palette allocator ----
+    // Global 256-entry OAM palette. Each sprite gets a 16-color slot.
+    // We track which slots are in use.
+    bool     palSlotUsed[PAL_MAX_SLOTS];   // slot 0 always used (transparent)
+    int      nextPalSlot;
+    int      allocPalSlot();               // returns slot index or -1 if full
+
+    // Quantise an arbitrary RGBA buffer to exactly 16 colours (+ idx 0 = transparent).
+    // Writes the 16 RGB555 colors into outPal[0..15] and fills outPx (w*h bytes,
+    // values 0–15). outPal and outPx must be pre-allocated by caller.
+    void quantise16(const uint8_t* rgba, int w, int h,
+                    uint16_t outPal[16], uint8_t* outPx);
+
+    // Upload one 16-color palette slot to OAM SPRITE_PALETTE.
+    void uploadPalSlot(int slot, const uint16_t pal16[16]);
+
+    // ---- Costume loading ----
     void loadCostume(ScratchCostume& costume, const char* extractDir,
                      const std::string& format);
-    bool loadPng(const char* path, uint16_t** outGfx, uint16_t** outPal,
-                 int* outW, int* outH,
-                 int maxW = 64, int maxH = 64);
 
-    // maxW/maxH: maximum output pixel dimensions (64 for sprites, 256×192 for backdrops)
-    bool loadBmp(const char* path, uint16_t** outGfx, uint16_t** outPal,
-                 int* outW, int* outH,
-                 int maxW = 64, int maxH = 64);
-
-    bool loadSvg(const char* path, uint16_t** outGfx, uint16_t** outPal,
+    bool loadPng(const char* path, uint8_t** outPx, uint16_t outPal[16],
+                 int* outW, int* outH, int maxW, int maxH);
+    bool loadBmp(const char* path, uint8_t** outPx, uint16_t outPal[16],
+                 int* outW, int* outH, int maxW, int maxH);
+    bool loadSvg(const char* path, uint8_t** outPx, uint16_t outPal[16],
                  int* outW, int* outH, int dstW, int dstH);
 
     void renderBackdrop(ScratchProject& project);
@@ -70,21 +77,11 @@ private:
     SpriteSize bestSpriteSize(int w, int h);
     void getSpriteSize(SpriteSize sz, int& w, int& h);
 
-    // OAM slot allocator
     bool      oamUsed[MAX_OAM_SPRITES];
     int       nextOam;
 
-    // VRAM sprite GFX allocator
-    uint16_t* gfxBases[MAX_GFX_SLOTS];
-    bool      gfxUsed[MAX_GFX_SLOTS];
-
-    // BG for backdrop
     int       bgHandle;
-    uint16_t* bgGfxPtr;
-    uint16_t* bgPalPtr;
+    bool      backdropLoaded;
 
-    // Sub-screen console for UI
     PrintConsole bottomConsole;
-
-    bool backdropLoaded;
 };
