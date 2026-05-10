@@ -146,6 +146,23 @@ void ScratchVM::executeThread(ScriptThread& thread, double dt) {
                 auto frame = thread.callStack.back();
                 thread.callStack.pop_back();
                 thread.currentBlockId = frame.blockId;
+
+                if (!thread.callStack.empty()) {
+                    auto& frame = thread.callStack.back();
+                
+                    if (frame.remaining > 0) frame.remaining--;
+                
+                    if (frame.remaining == 0) {
+                        thread.callStack.pop_back();
+                        thread.currentBlockId = frame.returnBlockId;
+                    } else {
+                        thread.currentBlockId = frame.returnBlockId;
+                    }
+                
+                    yielded = true;
+                    return;
+                }
+                
             } else {
                 thread.state = ScriptThread::DONE;
                 break;
@@ -171,19 +188,36 @@ ScratchValue ScratchVM::executeBlock(ScriptThread& thread,
         // --- Motion ---
         case BlockOpcode::MOTION_MOVESTEPS: {
             double steps = evaluateInput(thread, b->inputs.at("STEPS")).toNum();
-            double rad = (thread.sprite->direction - 90.0) * M_PI / 180.0;
-            thread.sprite->x += steps * cos(rad);
-            thread.sprite->y -= steps * sin(rad);
+        
+            double angle = thread.sprite->direction;
+            double rad = (angle - 90.0) * M_PI / 180.0;
+        
+            thread.sprite->x += cos(rad) * steps;
+            thread.sprite->y += sin(rad) * steps;
+
+            if (!std::isfinite(thread.sprite->x)) thread.sprite->x = 0;
+            if (!std::isfinite(thread.sprite->y)) thread.sprite->y = 0;
+            
             break;
         }
         case BlockOpcode::MOTION_TURNRIGHT: {
             double deg = evaluateInput(thread, b->inputs.at("DEGREES")).toNum();
-            thread.sprite->direction = ((int)(thread.sprite->direction + deg) % 360 + 360) % 360;
+            thread.sprite->direction += deg;
+
+            if (thread.sprite->direction >= 360.0)
+                thread.sprite->direction -= 360.0;
+            if (thread.sprite->direction < 0.0)
+                thread.sprite->direction += 360.0;
             break;
         }
         case BlockOpcode::MOTION_TURNLEFT: {
             double deg = evaluateInput(thread, b->inputs.at("DEGREES")).toNum();
-            thread.sprite->direction = ((int)(thread.sprite->direction - deg) % 360 + 360) % 360;
+            thread.sprite->direction -= deg;
+
+            if (thread.sprite->direction >= 360.0)
+                thread.sprite->direction += 360.0;
+            if (thread.sprite->direction < 0.0)
+                thread.sprite->direction -= 360.0;
             break;
         }
         case BlockOpcode::MOTION_GOTOXY: {
@@ -277,28 +311,34 @@ ScratchValue ScratchVM::executeBlock(ScriptThread& thread,
         }
         case BlockOpcode::CONTROL_REPEAT: {
             int times = (int)evaluateInput(thread, b->inputs.at("TIMES")).toNum();
-            if (times > 0 && b->inputs.count("SUBSTACK")) {
-                std::string subId = b->inputs.at("SUBSTACK").blockId;
-                // Push frame to return here after substack, decrement counter
-                ScriptThread::StackFrame frame;
-                frame.blockId = blockId; // return to REPEAT block to re-check
-                frame.loopCounter = times - 1;
-                thread.callStack.push_back(frame);
-                thread.currentBlockId = subId;
-                yielded = true; // force re-entry via stack
-            }
+        
+            if (times <= 0 || !b->inputs.count("SUBSTACK")) break;
+        
+            std::string subId = b->inputs.at("SUBSTACK").blockId;
+        
+            thread.callStack.push_back({
+                blockId,
+                blockId,
+                times
+            });
+        
+            thread.currentBlockId = subId;
+            yielded = true;
             break;
         }
         case BlockOpcode::CONTROL_FOREVER: {
-            if (b->inputs.count("SUBSTACK")) {
-                std::string subId = b->inputs.at("SUBSTACK").blockId;
-                ScriptThread::StackFrame frame;
-                frame.blockId = blockId;
-                frame.loopCounter = -1; // infinite
-                thread.callStack.push_back(frame);
-                thread.currentBlockId = subId;
-                yielded = true;
-            }
+            if (!b->inputs.count("SUBSTACK")) break;
+        
+            std::string subId = b->inputs.at("SUBSTACK").blockId;
+        
+            thread.callStack.push_back({
+                blockId,
+                blockId,
+                -1
+            });
+        
+            thread.currentBlockId = subId;
+            yielded = true;
             break;
         }
         case BlockOpcode::CONTROL_IF: {
