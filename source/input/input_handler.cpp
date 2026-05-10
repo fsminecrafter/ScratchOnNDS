@@ -1,145 +1,104 @@
 // =============================================================================
-// input_handler.cpp
+// input_handler.cpp — Fixed: single scanKeys(), correct edge detection
+//
+// NDS libnds key API:
+//   scanKeys()   — latches current hardware state into internal buffers
+//   keysDown()   — bits that are SET now but were CLEAR on the previous latch
+//   keysHeld()   — bits that are SET now  (regardless of previous state)
+//   keysUp()     — bits that are CLEAR now but were SET on the previous latch
+//
+// We call scanKeys() EXACTLY ONCE per frame inside update().
+// Everyone else reads our cached masks.  If scanKeys() were called a second
+// time in the same frame (e.g. from NDSExtension or the overlay menu) the
+// "just-pressed" edge state would be consumed and lost, causing the
+// "blinking" behaviour observed with hat blocks.
 // =============================================================================
 #include "input_handler.h"
+#include <nds/arm9/sound.h>
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
-#include <nds/arm9/sound.h>
 
-// -----------------------------------------------------------------------
-// Init
-// -----------------------------------------------------------------------
 void InputHandler::init() {
     keysDownMask = keysHeldMask = keysUpMask = 0;
-    touching = false;
-    micActive = false;
-    micLoudness = 0;
+    touching     = false;
+    micActive    = false;
+    micLoudness  = 0;
     memset(micBuffer, 0, sizeof(micBuffer));
-    memset(&touchPos, 0, sizeof(touchPos));
+    memset(&touchPos,  0, sizeof(touchPos));
 }
 
-// -----------------------------------------------------------------------
-// Update — call at top of each frame
-// -----------------------------------------------------------------------
 void InputHandler::update() {
+    // ── THE ONLY PLACE scanKeys() IS CALLED ──────────────────────────
     scanKeys();
-    keysDownMask = keysDown();
-    keysHeldMask = keysHeld();
-    keysUpMask   = keysUp();
 
-    // Touchscreen
-    touching = (keysHeld() & KEY_TOUCH) != 0;
-    if (touching) {
-        touchRead(&touchPos);
-    }
+    // Cache the three masks immediately after latching so nothing else
+    // needs to (or should) call the raw libnds functions.
+    keysDownMask = keysDown();   // just-pressed edges
+    keysHeldMask = keysHeld();   // currently held (superset of keysDown)
+    keysUpMask   = keysUp();     // just-released edges
 
-    // Microphone
+    // Touchscreen — read only when the TOUCH bit is held
+    touching = (keysHeldMask & KEY_TOUCH) != 0;
+    if (touching) touchRead(&touchPos);
+
     if (micActive) updateMic();
 }
 
 // -----------------------------------------------------------------------
-// Microphone
+// Coordinate conversion: NDS touch (0-255, 0-191) → Scratch (-240..240, -160..160)
 // -----------------------------------------------------------------------
-void InputHandler::updateMic() {
-    // micBuffer is filled by soundMicRecord callback (set in startMicRecording)
-    // Nothing to do here — just compute loudness from existing buffer
-
-    // Compute RMS loudness
-    long long sum = 0;
-    for (int i = 0; i < MIC_BUFFER_SIZE; i++) {
-        sum += (long long)micBuffer[i] * micBuffer[i];
-    }
-    double rms = sqrt((double)sum / MIC_BUFFER_SIZE);
-    // Scale to 0-100 (mic range ~0-32767)
-    micLoudness = (int)(rms / 327.67);
-    if (micLoudness > 100) micLoudness = 100;
-}
-
-void InputHandler::startMicRecording() {
-    if (!micActive) {
-        soundMicRecord(micBuffer, MIC_BUFFER_SIZE * sizeof(s16), MicFormat_12Bit, MIC_SAMPLE_RATE, nullptr);
-        micActive = true;
-    }
-}
-
-void InputHandler::stopMicRecording() {
-    if (micActive) {
-        soundMicOff();
-        micActive = false;
-        micLoudness = 0;
-    }
-}
-
-int InputHandler::getMicLoudness() {
-    if (!micActive) startMicRecording();
-    return micLoudness;
-}
-
-bool InputHandler::isMicActive() { return micActive; }
-
-// -----------------------------------------------------------------------
-// Touch
-// -----------------------------------------------------------------------
-bool InputHandler::isTouching() { return touching; }
-
-int InputHandler::getTouchRawX() { return touching ? touchPos.px : -1; }
-int InputHandler::getTouchRawY() { return touching ? touchPos.py : -1; }
-
-// Convert NDS touch coords (0-255, 0-191) to Scratch coords (-240..240, -160..160)
-int InputHandler::getTouchX() {
+int InputHandler::getTouchX() const {
     if (!touching) return 0;
     return (int)((touchPos.px - 128) * (240.0 / 128.0));
 }
-int InputHandler::getTouchY() {
+int InputHandler::getTouchY() const {
     if (!touching) return 0;
-    // NDS Y is top=0, bottom=191; Scratch Y is top=+, bottom=-
     return (int)((96 - touchPos.py) * (160.0 / 96.0));
 }
 
 // -----------------------------------------------------------------------
-// Map button name string -> NDS KEY_ mask
+// Button name → KEY_ mask
 // -----------------------------------------------------------------------
-u32 InputHandler::nameToMask(const std::string& name) {
-    if (name == "A" || name == "a")          return KEY_A;
-    if (name == "B" || name == "b")          return KEY_B;
-    if (name == "X" || name == "x")          return KEY_X;
-    if (name == "Y" || name == "y")          return KEY_Y;
-    if (name == "L" || name == "l")          return KEY_L;
-    if (name == "R" || name == "r")          return KEY_R;
-    if (name == "start")                     return KEY_START;
-    if (name == "select")                    return KEY_SELECT;
-    if (name == "up arrow"   || name == "up")    return KEY_UP;
-    if (name == "down arrow" || name == "down")  return KEY_DOWN;
-    if (name == "left arrow" || name == "left")  return KEY_LEFT;
-    if (name == "right arrow"|| name == "right") return KEY_RIGHT;
-    if (name == "space")                     return KEY_START; // map space -> start
-    if (name == "any")                       return 0xFFFFFFFF;
+u32 InputHandler::nameToMask(const std::string& name) const {
+    if (name == "A")                              return KEY_A;
+    if (name == "B")                              return KEY_B;
+    if (name == "X")                              return KEY_X;
+    if (name == "Y")                              return KEY_Y;
+    if (name == "L")                              return KEY_L;
+    if (name == "R")                              return KEY_R;
+    if (name == "start")                          return KEY_START;
+    if (name == "select")                         return KEY_SELECT;
+    if (name == "up"    || name == "up arrow")    return KEY_UP;
+    if (name == "down"  || name == "down arrow")  return KEY_DOWN;
+    if (name == "left"  || name == "left arrow")  return KEY_LEFT;
+    if (name == "right" || name == "right arrow") return KEY_RIGHT;
+    if (name == "space")                          return KEY_START;
+    if (name == "any")                            return 0xFFFFFFFFu;
     return 0;
 }
 
-// -----------------------------------------------------------------------
-// Scratch key sensing
-// -----------------------------------------------------------------------
+// ---- Scratch key API ------------------------------------------------
 bool InputHandler::isKeyDown(const std::string& name) {
     u32 mask = nameToMask(name);
-    if (mask == 0xFFFFFFFF) return keysDownMask != 0;
+    if (mask == 0xFFFFFFFFu) return keysDownMask != 0;
     return (keysDownMask & mask) != 0;
 }
 bool InputHandler::isKeyHeld(const std::string& name) {
     u32 mask = nameToMask(name);
-    if (mask == 0xFFFFFFFF) return keysHeldMask != 0;
+    if (mask == 0xFFFFFFFFu) return keysHeldMask != 0;
     return (keysHeldMask & mask) != 0;
 }
 bool InputHandler::isKeyUp(const std::string& name) {
     u32 mask = nameToMask(name);
-    if (mask == 0xFFFFFFFF) return keysUpMask != 0;
+    if (mask == 0xFFFFFFFFu) return keysUpMask != 0;
     return (keysUpMask & mask) != 0;
 }
 
-// -----------------------------------------------------------------------
-// NDS extension button queries
-// -----------------------------------------------------------------------
+// ---- NDS extension button API (same logic, different naming) ---------
+// isButtonDown   → hat blocks, one-shot actions   (just-pressed EDGE)
+// isButtonHeld   → continuous movement / reporters (held)
+// isButtonReleased → released reporters             (just-released EDGE)
 bool InputHandler::isButtonDown(const std::string& btn) {
     return (keysDownMask & nameToMask(btn)) != 0;
 }
@@ -164,4 +123,36 @@ std::string InputHandler::keyMaskToScratchName(u32 mask) {
     if (mask & KEY_START)  return "start";
     if (mask & KEY_SELECT) return "select";
     return "";
+}
+
+// -----------------------------------------------------------------------
+// Microphone
+// -----------------------------------------------------------------------
+void InputHandler::updateMic() {
+    long long sum = 0;
+    for (int i = 0; i < MIC_BUFFER_SIZE; i++)
+        sum += (long long)micBuffer[i] * micBuffer[i];
+    double rms = sqrt((double)sum / MIC_BUFFER_SIZE);
+    micLoudness = (int)(rms / 327.67);
+    if (micLoudness > 100) micLoudness = 100;
+}
+
+int InputHandler::getMicLoudness() {
+    if (!micActive) startMicRecording();
+    return micLoudness;
+}
+
+void InputHandler::startMicRecording() {
+    if (!micActive) {
+        soundMicRecord(micBuffer, MIC_BUFFER_SIZE * sizeof(s16),
+                       MicFormat_12Bit, MIC_SAMPLE_RATE, nullptr);
+        micActive = true;
+    }
+}
+void InputHandler::stopMicRecording() {
+    if (micActive) {
+        soundMicOff();
+        micActive    = false;
+        micLoudness  = 0;
+    }
 }
