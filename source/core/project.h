@@ -14,21 +14,17 @@ typedef struct jsmntok jsmntok_t;
 
 static constexpr int MAX_BLOCKS = 256;
 
-// -----------------------------------------------------------------------
-// Asset references (resolved to file paths after extraction)
-// -----------------------------------------------------------------------
 struct ScratchCostume {
     std::string name;
     std::string assetId;
-    std::string dataFormat; // "png", "svg", "bmp"
+    std::string dataFormat;   // "png", "svg", "bmp"
     int    bitmapResolution;
     double rotationCenterX;
     double rotationCenterY;
-    // Runtime: pointer to loaded OAM sprite data
-    uint16_t* gfxPtr;
-    uint16_t* palPtr;
-    bool      palUploaded;
-    int       palSlot;
+
+    // Runtime
+    uint16_t* gfxPtr;    // pointer into VRAM (tiled 4bpp for sprites, RGB555 for backdrops)
+    int       palSlot;   // index 0-15 into the global 16-slot OAM palette; -1 = unset
     int       width, height;
     bool      isBackdrop;
 };
