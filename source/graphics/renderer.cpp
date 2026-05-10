@@ -44,58 +44,6 @@
 // existing colour is used (O(n) search, fast for 256-entry space).
 //
 // Caller must free() the returned buffer.
-static uint8_t* rgba_to_8bpp(const uint8_t* rgba,
-                              unsigned w, unsigned h,
-                              uint16_t* outPal, int* outPalCount) {
-    uint8_t* px = (uint8_t*)malloc(w * h);
-    if (!px) return nullptr;
-
-    memset(outPal, 0, 256 * 2);
-    int palCount = 1; /* index 0 = transparent */
-
-    for (unsigned i = 0; i < w * h; i++) {
-        uint8_t r = rgba[i*4+0];
-        uint8_t g = rgba[i*4+1];
-        uint8_t b = rgba[i*4+2];
-        uint8_t a = rgba[i*4+3];
-
-        if (a < 128) {
-            px[i] = 0;
-            continue;
-        }
-
-        uint16_t c15 = lodepng_rgb555(r, g, b);
-
-        /* Linear search for existing entry */
-        int found = 0;
-        for (int p = 1; p < palCount; p++) {
-            if (outPal[p] == c15) { found = p; break; }
-        }
-
-        if (found == 0) {
-            if (palCount < 256) {
-                outPal[palCount] = c15;
-                found = palCount++;
-            } else {
-                /* Palette full: nearest colour (squared RGB555 distance) */
-                int best = 1, bestD = 0x7FFFFFFF;
-                int tr = (int)(r >> 3), tg = (int)(g >> 3), tb = (int)(b >> 3);
-                for (int p = 1; p < 256; p++) {
-                    int pr = (int)(outPal[p] & 0x1F);
-                    int pg = (int)((outPal[p] >> 5) & 0x1F);
-                    int pb = (int)((outPal[p] >> 10) & 0x1F);
-                    int d  = (tr-pr)*(tr-pr) + (tg-pg)*(tg-pg) + (tb-pb)*(tb-pb);
-                    if (d < bestD) { bestD = d; best = p; }
-                }
-                found = best;
-            }
-        }
-        px[i] = (uint8_t)found;
-    }
-
-    if (outPalCount) *outPalCount = palCount;
-    return px;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 void Renderer::init() {
