@@ -185,10 +185,11 @@ ScratchValue ScratchVM::executeBlock(ScriptThread& thread,
         case BlockOpcode::MOTION_MOVESTEPS: {
             double steps = evaluateInput(thread, b->inputs.at("STEPS")).toNum();
         
-            double rad = thread.sprite->direction * M_PI / 180.0;
+            double angle = thread.sprite->direction;
+            double rad = (angle - 90.0) * M_PI / 180.0;
         
-            thread.sprite->x += sin(rad) * steps;
-            thread.sprite->y += cos(rad) * steps;
+            thread.sprite->x += cos(rad) * steps;
+            thread.sprite->y += sin(rad) * steps;
         
             if (!std::isfinite(thread.sprite->x)) thread.sprite->x = 0;
             if (!std::isfinite(thread.sprite->y)) thread.sprite->y = 0;
@@ -197,8 +198,11 @@ ScratchValue ScratchVM::executeBlock(ScriptThread& thread,
         }
         case BlockOpcode::MOTION_TURNRIGHT: {
             double deg = evaluateInput(thread, b->inputs.at("DEGREES")).toNum();
+        
+            // Scratch: right turn = increase angle
             thread.sprite->direction += deg;
         
+            // normalize
             thread.sprite->direction = fmod(thread.sprite->direction, 360.0);
             if (thread.sprite->direction < 0)
                 thread.sprite->direction += 360.0;
@@ -207,6 +211,8 @@ ScratchValue ScratchVM::executeBlock(ScriptThread& thread,
         }
         case BlockOpcode::MOTION_TURNLEFT: {
             double deg = evaluateInput(thread, b->inputs.at("DEGREES")).toNum();
+        
+            // Scratch: left turn = decrease angle
             thread.sprite->direction -= deg;
         
             thread.sprite->direction = fmod(thread.sprite->direction, 360.0);
