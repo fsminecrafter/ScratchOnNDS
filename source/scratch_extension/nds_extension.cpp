@@ -1,22 +1,31 @@
 // =============================================================================
-// nds_extension.cpp — ScratchDS NDS Hardware Extension Plugin
+// nds_extension.cpp — Fixed hat-block firing (edge detection, not level)
+//
+// THE BUG THAT CAUSED BLINKING:
+//   shouldFireButtonHat() was calling isButtonDown() which reads
+//   keysDownMask (just-pressed edge).  That is CORRECT.
+//
+//   BUT main.cpp was ALSO calling fireKeyPressed() for NDS buttons via
+//   vm.fireKeyPressed() every frame as long as keysDownMask was set,
+//   which is fine — HOWEVER the real problem was that NDSExtension::update()
+//   was being called AFTER InputHandler::update() but in some code paths
+//   scanKeys() was being called a second time (in the overlay menu combo
+//   detection and in selectProject()), resetting the edge state.
+//
+//   Fix: NDSExtension never calls scanKeys().  It only reads from
+//   InputHandler's cached masks.  The overlay menu combo detection
+//   also reads from InputHandler (not its own scanKeys call).
 // =============================================================================
 #include "nds_extension.h"
 #include <nds.h>
 #include <string.h>
 #include <stdlib.h>
 
-// -----------------------------------------------------------------------
-// NDSBlocks constant definitions
-// Defined here (one TU) to avoid "defined but not used" ODR warnings
-// that occur when static const char* are placed in a header.
-// -----------------------------------------------------------------------
 namespace NDSBlocks {
     const char* WHEN_BUTTON_PRESSED  = "nds_whenbuttonpressed";
     const char* WHEN_CLAP            = "nds_whenclap";
     const char* WHEN_TOUCHED         = "nds_whentouched";
     const char* WHEN_COMBO           = "nds_whencombo";
-
     const char* BUTTON_PRESSED       = "nds_buttonpressed";
     const char* BUTTON_HELD          = "nds_buttonheld";
     const char* BUTTON_RELEASED      = "nds_buttonreleased";
@@ -24,36 +33,29 @@ namespace NDSBlocks {
     const char* TOUCH_PRESSED        = "nds_touchpressed";
     const char* CLAP_DETECTED        = "nds_clap_detected";
     const char* MIC_RECORDING        = "nds_mic_recording";
-
     const char* TOUCH_X              = "nds_touchx";
     const char* TOUCH_Y              = "nds_touchy";
     const char* TOUCH_DELTA_X        = "nds_touch_deltax";
     const char* TOUCH_DELTA_Y        = "nds_touch_deltay";
     const char* MICROPHONE_LOUDNESS  = "nds_microphone_loudness";
     const char* BATTERY_LEVEL        = "nds_battery_level";
-
     const char* SET_TOP_BACKLIGHT    = "nds_backlight_top";
     const char* SET_BOTTOM_BACKLIGHT = "nds_backlight_bottom";
     const char* RUMBLE               = "nds_rumble";
     const char* SET_VIBRATION        = "nds_setvibration";
 
-    // Null-terminated arrays used at runtime by main.cpp
     const char* const BUTTONS[] = {
-        "A", "B", "X", "Y", "L", "R",
-        "start", "select",
-        "up", "down", "left", "right",
-        nullptr
+        "A","B","X","Y","L","R","start","select",
+        "up","down","left","right", nullptr
     };
-
     const char* const COMBOS[] = {
-        "L+R", "A+B", "L+R+B", "L+A", "R+A",
-        "up+A", "down+A", "left+A", "right+A",
-        nullptr
+        "L+R","A+B","L+R+B","L+A","R+A",
+        "up+A","down+A","left+A","right+A", nullptr
     };
-} // namespace NDSBlocks
+}
 
 // -----------------------------------------------------------------------
-// Init — register all combos, start mic
+// Init
 // -----------------------------------------------------------------------
 void NDSExtension::init() {
     rumbleActive = false;
@@ -71,38 +73,30 @@ void NDSExtension::init() {
 }
 
 // -----------------------------------------------------------------------
-// Update — call every frame before VM step.
-// NOTE: scanKeys() is NOT called here.  main.cpp's mainLoop() calls
-// InputHandler::update() which calls scanKeys() exactly once per frame
-// before NDSExtension::update() is invoked.  Calling scanKeys() again
-// here would clear the just-pressed/released edge state that the VM
-// needs to read.
+// Update — reads ONLY from InputHandler's cached masks (no scanKeys here)
 // -----------------------------------------------------------------------
 void NDSExtension::update(float dt) {
     InputHandler& input = InputHandler::getInstance();
 
-    // keysHeld() returns the mask from the most recent scanKeys() call
-    // (performed by InputHandler::update() earlier this frame).
-    combos.update(keysHeld());
+    // keysHeld() would call the raw libnds function; we use our cached
+    // version instead so we don't disturb the edge-detection state.
+    combos.update(input.getKeysHeld());
 
     bool touching = input.isTouching();
-    touch.update(touching,
-                 input.getTouchX(),
-                 input.getTouchY(),
-                 dt);
+    touch.update(touching, input.getTouchX(), input.getTouchY(), dt);
 
-    int loudness = 0;
-    if (input.isMicActive()) {
-        loudness = input.getMicLoudness();
-    }
+    int loudness = input.isMicActive() ? input.getMicLoudness() : 0;
     clap.update(loudness, dt);
 
     updateRumble(dt);
 }
 
 // -----------------------------------------------------------------------
-// Button queries — delegate to InputHandler
+// Button queries
 // -----------------------------------------------------------------------
+// IMPORTANT: isButtonDown  → just-pressed EDGE   → use for hat blocks
+//            isButtonHeld  → currently held       → use for motion/reporters
+//            isButtonReleased → just-released     → use for release reporters
 bool NDSExtension::isButtonPressed(const std::string& btn) const {
     return InputHandler::getInstance().isButtonDown(btn);
 }
@@ -129,15 +123,15 @@ bool NDSExtension::menuComboJustPressed() const {
 // -----------------------------------------------------------------------
 // Touch queries
 // -----------------------------------------------------------------------
-int  NDSExtension::getTouchX() const       { return touch.lastX; }
-int  NDSExtension::getTouchY() const       { return touch.lastY; }
-bool NDSExtension::isTouching() const      { return touch.wasTouching; }
-bool NDSExtension::isTapped() const        { return touch.tapped(); }
-int  NDSExtension::getTouchDeltaX() const  { return touch.deltaX; }
-int  NDSExtension::getTouchDeltaY() const  { return touch.deltaY; }
+int  NDSExtension::getTouchX() const      { return touch.lastX; }
+int  NDSExtension::getTouchY() const      { return touch.lastY; }
+bool NDSExtension::isTouching() const     { return touch.wasTouching; }
+bool NDSExtension::isTapped() const       { return touch.tapped(); }
+int  NDSExtension::getTouchDeltaX() const { return touch.deltaX; }
+int  NDSExtension::getTouchDeltaY() const { return touch.deltaY; }
 
 // -----------------------------------------------------------------------
-// Microphone queries
+// Microphone
 // -----------------------------------------------------------------------
 int  NDSExtension::getMicLoudness() const {
     return InputHandler::getInstance().getMicLoudness();
@@ -148,10 +142,14 @@ bool NDSExtension::isMicRecording() const {
 }
 
 // -----------------------------------------------------------------------
-// Hat block firing conditions
+// Hat block predicates
+// These are called from main.cpp's loop ONCE per frame.
+// They use edge detection (just-pressed / just-triggered) so they only
+// fire on the frame the event actually starts — not every frame while held.
 // -----------------------------------------------------------------------
 bool NDSExtension::shouldFireButtonHat(const std::string& btn) const {
-    return isButtonPressed(btn);
+    // Edge: just-pressed this frame.
+    return InputHandler::getInstance().isButtonDown(btn);
 }
 bool NDSExtension::shouldFireClapHat() const  { return isClapDetected(); }
 bool NDSExtension::shouldFireTouchHat() const { return isTapped(); }
@@ -160,7 +158,7 @@ bool NDSExtension::shouldFireComboHat(const std::string& combo) const {
 }
 
 // -----------------------------------------------------------------------
-// Backlight control
+// Backlight / rumble
 // -----------------------------------------------------------------------
 void NDSExtension::setTopBacklight(bool on) {
     if (on) powerOn(POWER_LCD | POWER_2D_A);
@@ -169,10 +167,6 @@ void NDSExtension::setTopBacklight(bool on) {
 void NDSExtension::setBottomBacklight(bool on) {
     REG_MASTER_BRIGHT_SUB = on ? 0 : (1 << 14) | 16;
 }
-
-// -----------------------------------------------------------------------
-// Rumble pak (GBA Slot-2 rumble device)
-// -----------------------------------------------------------------------
 void NDSExtension::setRumble(bool on) {
 #ifdef ARM9
     *(vu16*)0x08000000 = on ? 0x0002 : 0x0000;
@@ -186,10 +180,10 @@ void NDSExtension::pulseRumble(float durationSecs) {
     rumbleTimer = durationSecs;
 }
 void NDSExtension::updateRumble(float dt) {
-    if (rumbleTimer > 0) {
+    if (rumbleTimer > 0.0f) {
         rumbleTimer -= dt;
-        if (rumbleTimer <= 0) {
-            rumbleTimer = 0;
+        if (rumbleTimer <= 0.0f) {
+            rumbleTimer = 0.0f;
             setRumble(false);
         }
     }
