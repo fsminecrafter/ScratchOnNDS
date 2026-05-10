@@ -2,6 +2,12 @@
 
 A Scratch 3.0 runtime for the Nintendo DS. Place `.sb3` projects on your R4 SD card and run them on real hardware.
 
+Quick command.
+
+```
+rm -rf ScratchOnNDS && git clone https://github.com/fsminecrafter/ScratchOnNDS.git && cd ScratchOnNDS && make
+```
+
 ---
 
 ## SD Card Layout
