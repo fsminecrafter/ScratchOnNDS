@@ -62,8 +62,8 @@ static uint8_t* rgba_to_8bpp(const uint8_t* rgba,
 
         if (a < 128) { px[i] = 0; continue; }
 
-        //uint16_t c15 = RGB15(r >> 3, g >> 3, b >> 3); for testing
-        uint16_t c15 = RGB15(31, 0, 0);
+        uint16_t c15 = RGB15(r >> 3, g >> 3, b >> 3);
+      
         int found = 0;
         for (int p = 1; p < palCount; p++) {
             if (outPal[p] == c15) { found = p; break; }
