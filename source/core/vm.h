@@ -45,9 +45,9 @@ struct ScriptThread {
 
     // Execution stack for nested control structures
     struct StackFrame {
-        std::string blockId;      // block to return to after inner completes
-        int         loopCounter;  // for repeat
-        bool        loopConditionMet;
+        std::string loopBlockId;
+        std::string returnBlockId;
+        int remaining = -1; // -1 = forever
     };
     std::vector<StackFrame> callStack;
     int stepsThisFrame;
