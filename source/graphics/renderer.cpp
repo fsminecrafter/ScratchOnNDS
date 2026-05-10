@@ -126,6 +126,34 @@ void Renderer::loadSprites(ScratchProject& project) {
             loadCostume(costume, project.extractDir.c_str(), costume.dataFormat);
 }
 
+static void linearToTiled8(
+    const uint8_t* src,
+    uint8_t* dst,
+    int w,
+    int h
+) {
+    int tilesX = w / 8;
+    int tilesY = h / 8;
+
+    int di = 0;
+
+    for (int ty = 0; ty < tilesY; ty++) {
+        for (int tx = 0; tx < tilesX; tx++) {
+
+            for (int py = 0; py < 8; py++) {
+                for (int px = 0; px < 8; px++) {
+
+                    int sx = tx * 8 + px;
+                    int sy = ty * 8 + py;
+
+                    dst[di++] =
+                        src[sy * w + sx];
+                }
+            }
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // loadCostume — dispatch to format loader, then upload to VRAM
 // ─────────────────────────────────────────────────────────────────────────────
@@ -212,7 +240,27 @@ void Renderer::loadCostume(ScratchCostume& costume, const char* extractDir,
     uint16_t* vramGfx = oamAllocateGfx(&oamMain, sz, SpriteColorFormat_256Color);
     if (!vramGfx) { free(gfx); free(pal); return; }
 
-    dmaCopy(gfx, vramGfx, (size_t)(sw * sh));
+    uint8_t* tiled =
+        (uint8_t*)malloc(sw * sh);
+    
+    if (!tiled) {
+        free(gfx);
+        free(pal);
+        return;
+    }
+    
+    memset(tiled, 0, sw * sh);
+    
+    linearToTiled8(
+        (uint8_t*)gfx,
+        tiled,
+        sw,
+        sh
+    );
+    
+    dmaCopy(tiled, vramGfx, sw * sh);
+    
+    free(tiled);
     free(gfx);
 
     uint16_t* vramPal = SPRITE_PALETTE;
