@@ -45,10 +45,6 @@ else
 fi
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-DEVKITPRO_VERSION="6.0.2"
-DEVKITPRO_DEB="devkitpro-pacman-installer_${DEVKITPRO_VERSION}_amd64.deb"
-DEVKITPRO_URL="https://github.com/devkitPro/pacman/releases/download/v${DEVKITPRO_VERSION}/${DEVKITPRO_DEB}"
-
 DEVKITPRO_ROOT="/opt/devkitpro"
 DEVKITARM_ROOT="${DEVKITPRO_ROOT}/devkitARM"
 
@@ -93,24 +89,32 @@ sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}"
 ok "System packages installed."
 
 # ─── Step 2: devkitPro pacman ─────────────────────────────────────────────────
-header "Step 2/5 — devkitPro pacman (dkp-pacman ${DEVKITPRO_VERSION})"
+header "Step 2/5 — devkitPro pacman"
+
+LOCAL_INSTALLER="./devkitproinstaller.sh"
 
 if command -v dkp-pacman >/dev/null 2>&1; then
-    INSTALLED_VER=$(dkp-pacman --version 2>/dev/null | head -1 | awk '{print $3}' || echo "unknown")
-    ok "dkp-pacman already installed (${INSTALLED_VER}). Skipping download."
+    INSTALLED_VER=$(dkp-pacman --version 2>/dev/null | head -1 || echo "unknown")
+    ok "dkp-pacman already installed (${INSTALLED_VER}). Skipping install."
 else
-    TMP_DIR=$(mktemp -d)
-    trap 'rm -rf "$TMP_DIR"' EXIT
+    [[ -f "${LOCAL_INSTALLER}" ]] || \
+        die "Missing ${LOCAL_INSTALLER}"
 
-    info "Downloading devkitPro pacman installer..."
-    download "${DEVKITPRO_URL}" "${TMP_DIR}/${DEVKITPRO_DEB}" || \
-        die "Failed to download ${DEVKITPRO_URL}\nCheck your internet connection or visit:\nhttps://github.com/devkitPro/pacman/releases/latest"
+    chmod +x "${LOCAL_INSTALLER}"
 
-    info "Installing devkitPro pacman .deb..."
-    sudo gdebi -n "${TMP_DIR}/${DEVKITPRO_DEB}" || \
-        die "gdebi install failed. Try: sudo dpkg -i ${TMP_DIR}/${DEVKITPRO_DEB} && sudo apt-get install -f"
+    info "Running local devkitPro installer..."
 
-    ok "dkp-pacman installed."
+    # Prevent installer oddities from aborting setup
+    if ! sudo bash "${LOCAL_INSTALLER}"; then
+        warn "Installer returned non-zero status."
+        warn "Checking whether dkp-pacman was installed anyway..."
+    fi
+
+    if command -v dkp-pacman >/dev/null 2>&1; then
+        ok "dkp-pacman installed successfully."
+    else
+        die "devkitPro installer failed."
+    fi
 fi
 
 # ─── Step 3: Environment variables ───────────────────────────────────────────
