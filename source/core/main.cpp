@@ -106,10 +106,6 @@ int main() {
     printf("  Console OK\n");
     printf("  Initialising hardware...\n");
 
-    // ── Step 4: Finish hardware init (OAM, timers, RNG) ────────────────
-    oamInit(&oamMain, SpriteMapping_1D_32, false);
-    oamInit(&oamSub,  SpriteMapping_1D_32, false);
-
     // Timer 0 for frame timing / FPS measurement
     timerStart(0, ClockDivider_1024, TIMER_FREQ_1024(60), nullptr);
     srand(timerElapsed(0) ^ 0xDEAD);
