@@ -9,6 +9,8 @@
 #include <map>
 #include <functional>
 
+const std::vector<ScriptThread>& getThreads() const { return threads; }
+
 // -----------------------------------------------------------------------
 // Runtime value (Scratch is dynamically typed: number or string)
 // -----------------------------------------------------------------------
