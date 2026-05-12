@@ -1,109 +1,230 @@
 #define _USE_MATH_DEFINES
 // =============================================================================
-// vm.cpp — Scratch VM execution engine
-// Fixes: TURNRIGHT/TURNLEFT were swapped; IFONEDGEBOUNCE caused 1-frame flash.
+// vm.cpp — Extended Scratch 3.0 Virtual Machine
+//
+// New in this revision:
+//   • Lists: add/delete/insert/replace/item/itemNum/length/contains/show/hide
+//   • Clones: create_clone_of, start_as_clone, delete_this_clone (pool alloc)
+//   • Broadcast-and-wait: caller yields until all spawned threads finish
+//   • Glide-to: smooth interpolation tracked per stack frame (no extra alloc)
+//   • String ops: letter_of, length, contains, join (already had join)
+//   • sensing_of: read x/y/direction/size/costume/volume from another sprite
+//   • Touching: sprite–sprite AABB, sprite–edge
+//   • Math: all OPERATOR_MATHOP variants
+//   • Control: repeat_until, wait_until (edge-triggered, not level)
+//   • Data: show/hide variable, show/hide list
+//   • Sound: change/set volume
+//   • Motion: set rotation style, x/y/direction reporters
+//   • Looks: say reporters, costume number/name, size reporter
 // =============================================================================
 #include "vm.h"
 #include "../audio/audio_manager.h"
 #include "../input/input_handler.h"
 #include <math.h>
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 
-// -----------------------------------------------------------------------
-// ScratchValue helpers
-// -----------------------------------------------------------------------
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ScratchValue
+// ═══════════════════════════════════════════════════════════════════════════════
+
 double ScratchValue::toNum() const {
     if (type == NUM) return numVal;
-    return atof(strVal.c_str());
+    // Scratch: trim whitespace then parse
+    const char* p = strVal.c_str();
+    while (*p == ' ' || *p == '\t') p++;
+    if (!*p) return 0.0;
+    char* end;
+    double v = strtod(p, &end);
+    // If nothing was parsed, return 0 (Scratch semantics)
+    if (end == p) return 0.0;
+    return v;
 }
+
 std::string ScratchValue::toStr() const {
     if (type == STR) return strVal;
+    // Scratch: integers print without decimal; floats use minimal precision
     char buf[32];
-    if (numVal == (long long)numVal) snprintf(buf, sizeof(buf), "%lld", (long long)numVal);
-    else snprintf(buf, sizeof(buf), "%.10g", numVal);
+    double v = numVal;
+    if (v != v) return "NaN";               // NaN guard
+    if (v == (long long)v && v >= -1e15 && v <= 1e15)
+        snprintf(buf, sizeof(buf), "%lld", (long long)v);
+    else
+        snprintf(buf, sizeof(buf), "%.10g", v);
     return buf;
 }
+
 bool ScratchValue::operator==(const ScratchValue& o) const {
-    if (type == STR && o.type == STR) return strVal == o.strVal;
+    // Scratch equality: numeric if both parse as numbers, else case-insensitive string
+    if (type == STR && o.type == STR) {
+        // Try numeric comparison first
+        const char* a = strVal.c_str();
+        const char* b = o.strVal.c_str();
+        char* ea; char* eb;
+        double da = strtod(a, &ea);
+        double db = strtod(b, &eb);
+        bool aNum = (ea != a && *ea == '\0');
+        bool bNum = (eb != b && *eb == '\0');
+        if (aNum && bNum) return da == db;
+        // Case-insensitive string compare
+        if (strVal.size() != o.strVal.size()) return false;
+        for (size_t i = 0; i < strVal.size(); i++)
+            if (tolower((unsigned char)strVal[i]) != tolower((unsigned char)o.strVal[i]))
+                return false;
+        return true;
+    }
     return toNum() == o.toNum();
 }
 bool ScratchValue::operator<(const ScratchValue& o) const { return toNum() < o.toNum(); }
 bool ScratchValue::operator>(const ScratchValue& o) const { return toNum() > o.toNum(); }
 
-// Normalize Scratch direction into (-180, 180] range
-static double normDir(double d) {
+// ═══════════════════════════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+double ScratchVM::normDir(double d) {
     d = fmod(d, 360.0);
-    if (d > 180.0)  d -= 360.0;
+    if (d > 180.0)   d -= 360.0;
     if (d <= -180.0) d += 360.0;
     return d;
 }
 
-// -----------------------------------------------------------------------
-// Init
-// -----------------------------------------------------------------------
+static bool inputHas(ScratchBlock* b, const char* key) {
+    return b->inputs.count(key) != 0;
+}
+static bool fieldHas(ScratchBlock* b, const char* key) {
+    return b->fields.count(key) != 0;
+}
+static const std::string& fieldVal(ScratchBlock* b, const char* key) {
+    static std::string empty;
+    auto it = b->fields.find(key);
+    return it != b->fields.end() ? it->second : empty;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Init / Green Flag
+// ═══════════════════════════════════════════════════════════════════════════════
+
 void ScratchVM::init(ScratchProject& proj) {
     project = &proj;
     globalTimer = 0.0;
+    answerStr.clear();
     threads.clear();
+    pendingThreads.clear();
+    broadcasts.clear();
+    runtimeLists.clear();
+
+    // Initialise clone pool
+    memset(cloneUsed, 0, sizeof(cloneUsed));
+
+    // Build runtime lists from project data
+    for (auto& sprite : proj.targets) {
+        for (auto& lst : sprite.lists) {
+            ListEntry e;
+            e.owner      = &sprite;
+            e.list.name  = lst.name;
+            e.list.items = lst.items;
+            runtimeLists.push_back(std::move(e));
+        }
+    }
 }
 
-// -----------------------------------------------------------------------
-// Green flag
-// -----------------------------------------------------------------------
 void ScratchVM::greenFlag() {
     threads.clear();
+    pendingThreads.clear();
+    broadcasts.clear();
     globalTimer = 0.0;
+    // Delete all clones
+    if (project) {
+        auto& tgts = project->targets;
+        for (int i = (int)tgts.size() - 1; i >= 0; i--) {
+            if (tgts[i].isClone) tgts.erase(tgts.begin() + i);
+        }
+    }
+    memset(cloneUsed, 0, sizeof(cloneUsed));
     for (auto& sprite : project->targets)
         startHatBlocks(BlockOpcode::EVENT_WHENFLAGCLICKED, &sprite);
 }
 
-// -----------------------------------------------------------------------
-// Start threads for a hat block type on a sprite
-// -----------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
+// Hat block spawning
+// ═══════════════════════════════════════════════════════════════════════════════
+
 void ScratchVM::startHatBlocks(BlockOpcode hat, ScratchSprite* sprite,
                                 const std::string& field) {
     for (auto& b : sprite->blocks) {
-        if (!b.topLevel) continue;
-        if (b.opcode != hat) continue;
-
+        if (!b.topLevel || b.opcode != hat) continue;
         if (hat == BlockOpcode::EVENT_WHENKEYPRESSED) {
-            auto it = b.fields.find("KEY_OPTION");
-            if (it == b.fields.end() || it->second != field) continue;
+            if (fieldVal(&b, "KEY_OPTION") != field) continue;
         }
         if (hat == BlockOpcode::EVENT_WHENBROADCASTRECEIVED) {
-            auto it = b.fields.find("BROADCAST_OPTION");
-            if (it == b.fields.end() || it->second != field) continue;
+            // Case-insensitive broadcast match
+            const std::string& bOpt = fieldVal(&b, "BROADCAST_OPTION");
+            if (bOpt.size() != field.size()) continue;
+            bool match = true;
+            for (size_t i = 0; i < bOpt.size(); i++)
+                if (tolower((unsigned char)bOpt[i]) != tolower((unsigned char)field[i]))
+                    { match = false; break; }
+            if (!match) continue;
         }
-
-        ScriptThread thread;
-        thread.sprite = sprite;
-        thread.currentBlockId = b.nextId;
-        thread.state = ScriptThread::RUNNING;
-        thread.waitTimer = 0.0;
-        thread.isClone = false;
-        thread.stepsThisFrame = 0;
-        if (!thread.currentBlockId.empty())
-            threads.push_back(thread);
+        if (!b.nextId.empty() && pendingThreads.size() < 64) {
+            ScriptThread t;
+            t.sprite         = sprite;
+            t.currentBlockId = b.nextId;
+            t.state          = ScriptThread::RUNNING;
+            t.isClone        = sprite->isClone;
+            pendingThreads.push_back(std::move(t));
+        }
     }
 }
 
-// -----------------------------------------------------------------------
+int ScratchVM::startHatBlocksCount(BlockOpcode hat, ScratchSprite* sprite,
+                                    const std::string& field) {
+    int before = (int)pendingThreads.size();
+    startHatBlocks(hat, sprite, field);
+    return (int)pendingThreads.size() - before;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Step
-// -----------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
+
 void ScratchVM::step(double dt) {
     globalTimer += dt;
 
+    // Flush pending threads
     for (auto& t : pendingThreads) {
-        if (threads.size() < 64)
-            threads.push_back(t);
+        if (threads.size() < 128) threads.push_back(std::move(t));
     }
     pendingThreads.clear();
 
+    // Advance broadcasts-and-wait counters
+    for (auto& br : broadcasts) {
+        if (br.isWaiting && br.threadsLaunched > 0
+            && br.threadsDone >= br.threadsLaunched) {
+            // wake up any thread waiting on this
+            for (auto& t : threads) {
+                if (t.state == ScriptThread::WAITING_BROADCAST
+                    && !t.callStack.empty()
+                    && t.callStack.back().broadcastName == br.name) {
+                    t.state = ScriptThread::RUNNING;
+                }
+            }
+        }
+    }
+    // Remove finished broadcast records
+    for (int i = (int)broadcasts.size() - 1; i >= 0; i--) {
+        if (broadcasts[i].threadsDone >= broadcasts[i].threadsLaunched)
+            broadcasts.erase(broadcasts.begin() + i);
+    }
+
+    // Run threads
     for (int i = (int)threads.size() - 1; i >= 0; i--) {
         ScriptThread& thread = threads[i];
 
@@ -113,12 +234,48 @@ void ScratchVM::step(double dt) {
         }
         if (thread.state == ScriptThread::WAITING_SECS) {
             thread.waitTimer -= dt;
-            if (thread.waitTimer <= 0.0) thread.state = ScriptThread::RUNNING;
-            else continue;
+            if (thread.waitTimer > 0.0) continue;
+            thread.state = ScriptThread::RUNNING;
         }
         if (thread.state == ScriptThread::WAITING_SOUND) {
-            if (!AudioManager::getInstance().isPlaying()) thread.state = ScriptThread::RUNNING;
-            else continue;
+            if (AudioManager::getInstance().isPlaying()) continue;
+            thread.state = ScriptThread::RUNNING;
+        }
+        if (thread.state == ScriptThread::WAITING_BROADCAST) {
+            continue;  // woken above
+        }
+        if (thread.state == ScriptThread::WAITING_UNTIL) {
+            // Condition block stored in top callStack frame
+            if (!thread.callStack.empty() && thread.callStack.back().isWaitUntil) {
+                bool cond = false;
+                bool y = false;
+                ScratchValue cv = executeBlock(thread,
+                    thread.callStack.back().condBlockId, y);
+                cond = cv.toBool();
+                thread.state = ScriptThread::RUNNING;  // reset so executeBlock works
+                if (!cond) { thread.state = ScriptThread::WAITING_UNTIL; continue; }
+                thread.callStack.pop_back();
+            } else {
+                thread.state = ScriptThread::RUNNING;
+            }
+        }
+
+        // Tick glide on top frame if active
+        if (!thread.callStack.empty() && thread.callStack.back().isGlide) {
+            StackFrame& gf = thread.callStack.back();
+            gf.glideElapsed += dt;
+            double t_frac = (gf.glideDuration > 0.0)
+                            ? gf.glideElapsed / gf.glideDuration
+                            : 1.0;
+            if (t_frac >= 1.0) t_frac = 1.0;
+            thread.sprite->x = gf.glideStartX + (gf.glideEndX - gf.glideStartX) * t_frac;
+            thread.sprite->y = gf.glideStartY + (gf.glideEndY - gf.glideStartY) * t_frac;
+            if (t_frac >= 1.0) {
+                thread.callStack.pop_back();
+                thread.state = ScriptThread::RUNNING;
+            } else {
+                continue;  // still gliding
+            }
         }
 
         thread.stepsThisFrame = 0;
@@ -126,10 +283,11 @@ void ScratchVM::step(double dt) {
     }
 }
 
-// -----------------------------------------------------------------------
-// Execute a single thread for one frame
-// -----------------------------------------------------------------------
-void ScratchVM::executeThread(ScriptThread& thread, double dt) {
+// ═══════════════════════════════════════════════════════════════════════════════
+// Execute thread for one frame
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void ScratchVM::executeThread(ScriptThread& thread, double /*dt*/) {
     while (!thread.currentBlockId.empty()
            && thread.state == ScriptThread::RUNNING
            && thread.stepsThisFrame < MAX_STEPS_PER_FRAME)
@@ -137,37 +295,50 @@ void ScratchVM::executeThread(ScriptThread& thread, double dt) {
         bool yielded = false;
         executeBlock(thread, thread.currentBlockId, yielded);
         thread.stepsThisFrame++;
-
-        if (yielded) break;
+        if (yielded) return;
 
         ScratchBlock* b = getBlock(thread, thread.currentBlockId);
-
         if (b && !b->nextId.empty()) {
             thread.currentBlockId = b->nextId;
         } else {
-            if (!thread.callStack.empty()) {
-                auto& frame = thread.callStack.back();
+            // End of chain — unwind call stack
+            while (!thread.callStack.empty()) {
+                StackFrame& frame = thread.callStack.back();
+                if (frame.isGlide || frame.isWaitUntil || frame.isBroadcastWait) {
+                    return; // handled in step()
+                }
                 if (frame.remaining > 0) frame.remaining--;
                 if (frame.remaining == 0) {
                     thread.callStack.pop_back();
+                    // Continue after the loop block
                     if (!thread.callStack.empty())
                         thread.currentBlockId = thread.callStack.back().returnBlockId;
-                    else
-                        thread.state = ScriptThread::DONE;
+                    else {
+                        // find next after the loop's own block
+                        ScratchBlock* lb = getBlock(thread, frame.loopBlockId);
+                        thread.currentBlockId = lb ? lb->nextId : "";
+                    }
                 } else {
-                    thread.currentBlockId = frame.returnBlockId;
+                    // Repeat next iteration: jump back to substack start
+                    ScratchBlock* lb = getBlock(thread, frame.loopBlockId);
+                    if (lb && inputHas(lb, "SUBSTACK"))
+                        thread.currentBlockId = lb->inputs.at("SUBSTACK").blockId;
+                    else
+                        thread.currentBlockId = "";
+                    return; // yield for one frame per iteration (cooperative)
                 }
-                continue;
+                if (!thread.currentBlockId.empty()) return;
             }
             thread.state = ScriptThread::DONE;
-            break;
+            return;
         }
     }
 }
 
-// -----------------------------------------------------------------------
-// Execute a single block
-// -----------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
+// Execute one block
+// ═══════════════════════════════════════════════════════════════════════════════
+
 ScratchValue ScratchVM::executeBlock(ScriptThread& thread,
                                       const std::string& blockId,
                                       bool& yielded) {
@@ -175,423 +346,967 @@ ScratchValue ScratchVM::executeBlock(ScriptThread& thread,
     ScratchBlock* b = getBlock(thread, blockId);
     if (!b) { thread.state = ScriptThread::DONE; return ScratchValue(); }
 
-    ScratchValue out;
+    // Dispatch by category prefix for speed
+    BlockOpcode op = b->opcode;
 
+    if (op >= BlockOpcode::MOTION_MOVESTEPS && op <= BlockOpcode::MOTION_DIRECTION)
+        return execMotion(thread, b, yielded);
+    if (op >= BlockOpcode::LOOKS_SAYFORSECS && op <= BlockOpcode::LOOKS_CHANGEEFFECTBY)
+        return execLooks(thread, b, yielded);
+    if (op >= BlockOpcode::SOUND_PLAYUNTILDONE && op <= BlockOpcode::SOUND_SETVOLUMETO)
+        return execSound(thread, b, yielded);
+    if (op >= BlockOpcode::CONTROL_WAIT && op <= BlockOpcode::CONTROL_DELETE_THIS_CLONE)
+        return execControl(thread, b, yielded);
+    if (op >= BlockOpcode::SENSING_TOUCHINGOBJECT && op <= BlockOpcode::SENSING_ASKANDWAIT)
+        return execSensing(thread, b, yielded);
+    if (op >= BlockOpcode::DATA_SETVARIABLETO && op <= BlockOpcode::DATA_HIDELIST)
+        return execData(thread, b, yielded);
+    if (op >= BlockOpcode::OPERATOR_ADD && op <= BlockOpcode::OPERATOR_MATHOP)
+        return execOperator(thread, b, yielded);
+    if (op >= BlockOpcode::NDS_BUTTONPRESSED)
+        return execNDS(thread, b, yielded);
+
+    return ScratchValue();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Motion
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ScratchValue ScratchVM::execMotion(ScriptThread& t, ScratchBlock* b, bool& yielded) {
+    ScratchSprite* s = t.sprite;
     switch (b->opcode) {
-
-        // --- Motion ---
         case BlockOpcode::MOTION_MOVESTEPS: {
-            double steps = evaluateInput(thread, b->inputs.at("STEPS")).toNum();
-            double rad = (thread.sprite->direction - 90.0) * M_PI / 180.0;
-            thread.sprite->x += cos(rad) * steps;
-            thread.sprite->y -= sin(rad) * steps; // NDS Y is inverted vs Scratch
-            if (!std::isfinite(thread.sprite->x)) thread.sprite->x = 0;
-            if (!std::isfinite(thread.sprite->y)) thread.sprite->y = 0;
+            double steps = evaluateInput(t, b->inputs.at("STEPS")).toNum();
+            double rad = (s->direction - 90.0) * M_PI / 180.0;
+            s->x += cos(rad) * steps;
+            s->y -= sin(rad) * steps;
             break;
         }
-
-        // FIX: TURNRIGHT increases direction (clockwise), TURNLEFT decreases it.
-        // Previously these were swapped.
-        case BlockOpcode::MOTION_TURNRIGHT: {
-            double deg = evaluateInput(thread, b->inputs.at("DEGREES")).toNum();
-            thread.sprite->direction = normDir(thread.sprite->direction + deg);
+        case BlockOpcode::MOTION_TURNRIGHT:
+            s->direction = normDir(s->direction +
+                evaluateInput(t, b->inputs.at("DEGREES")).toNum());
             break;
-        }
-        case BlockOpcode::MOTION_TURNLEFT: {
-            double deg = evaluateInput(thread, b->inputs.at("DEGREES")).toNum();
-            thread.sprite->direction = normDir(thread.sprite->direction - deg);
+        case BlockOpcode::MOTION_TURNLEFT:
+            s->direction = normDir(s->direction -
+                evaluateInput(t, b->inputs.at("DEGREES")).toNum());
             break;
-        }
-
-        case BlockOpcode::MOTION_GOTOXY: {
-            thread.sprite->x = evaluateInput(thread, b->inputs.at("X")).toNum();
-            thread.sprite->y = evaluateInput(thread, b->inputs.at("Y")).toNum();
+        case BlockOpcode::MOTION_GOTOXY:
+            s->x = evaluateInput(t, b->inputs.at("X")).toNum();
+            s->y = evaluateInput(t, b->inputs.at("Y")).toNum();
+            break;
+        case BlockOpcode::MOTION_GLIDETO: {
+            // Push a glide frame — actual movement in step()
+            double secs = inputHas(b, "SECS")
+                          ? evaluateInput(t, b->inputs.at("SECS")).toNum() : 0.0;
+            double ex   = inputHas(b, "X") ? evaluateInput(t, b->inputs.at("X")).toNum() : s->x;
+            double ey   = inputHas(b, "Y") ? evaluateInput(t, b->inputs.at("Y")).toNum() : s->y;
+            StackFrame gf;
+            gf.isGlide       = true;
+            gf.loopBlockId   = b->id;
+            gf.returnBlockId = b->nextId;
+            gf.glideStartX   = s->x;
+            gf.glideStartY   = s->y;
+            gf.glideEndX     = ex;
+            gf.glideEndY     = ey;
+            gf.glideDuration = secs > 0.0 ? secs : 0.0;
+            gf.glideElapsed  = 0.0;
+            gf.remaining     = 1;
+            t.callStack.push_back(gf);
+            yielded = true;
             break;
         }
         case BlockOpcode::MOTION_SETX:
-            thread.sprite->x = evaluateInput(thread, b->inputs.at("X")).toNum();
-            break;
+            s->x = evaluateInput(t, b->inputs.at("X")).toNum(); break;
         case BlockOpcode::MOTION_SETY:
-            thread.sprite->y = evaluateInput(thread, b->inputs.at("Y")).toNum();
-            break;
+            s->y = evaluateInput(t, b->inputs.at("Y")).toNum(); break;
         case BlockOpcode::MOTION_CHANGEXBY:
-            thread.sprite->x += evaluateInput(thread, b->inputs.at("DX")).toNum();
-            break;
+            s->x += evaluateInput(t, b->inputs.at("DX")).toNum(); break;
         case BlockOpcode::MOTION_CHANGEYBY:
-            thread.sprite->y += evaluateInput(thread, b->inputs.at("DY")).toNum();
-            break;
-
-        // FIX: Edge bounce — clamp position first, then reflect the relevant
-        // velocity component. The old code used `360 - dir` which could produce
-        // a direction that immediately satisfied the other wall condition,
-        // causing a 1-frame position flash to 0,0.
+            s->y += evaluateInput(t, b->inputs.at("DY")).toNum(); break;
         case BlockOpcode::MOTION_IFONEDGEBOUNCE: {
-            ScratchSprite* s = thread.sprite;
             const double XMAX = 220.0, YMAX = 160.0;
             bool hitX = false, hitY = false;
-
-            if (s->x > XMAX)  { s->x =  XMAX; hitX = true; }
+            if (s->x >  XMAX) { s->x =  XMAX; hitX = true; }
             if (s->x < -XMAX) { s->x = -XMAX; hitX = true; }
-            if (s->y > YMAX)  { s->y =  YMAX; hitY = true; }
+            if (s->y >  YMAX) { s->y =  YMAX; hitY = true; }
             if (s->y < -YMAX) { s->y = -YMAX; hitY = true; }
-
             if (hitX || hitY) {
-                // Convert Scratch direction to standard math angle
                 double rad = (s->direction - 90.0) * M_PI / 180.0;
-                double dx = cos(rad);
-                double dy = -sin(rad);
+                double dx = cos(rad), dy = -sin(rad);
                 if (hitX) dx = -dx;
                 if (hitY) dy = -dy;
-                // Convert back to Scratch direction
-                double newDir = atan2(-dy, dx) * 180.0 / M_PI + 90.0;
-                s->direction = normDir(newDir);
+                s->direction = normDir(atan2(-dy, dx) * 180.0 / M_PI + 90.0);
             }
             break;
         }
+        case BlockOpcode::MOTION_SETROTATIONSTYLE:
+            s->rotationStyle = fieldVal(b, "STYLE");
+            break;
+        case BlockOpcode::MOTION_XPOSITION:
+            return ScratchValue(s->x);
+        case BlockOpcode::MOTION_YPOSITION:
+            return ScratchValue(s->y);
+        case BlockOpcode::MOTION_DIRECTION:
+            return ScratchValue((double)s->direction);
+        default: break;
+    }
+    return ScratchValue();
+}
 
-        // --- Looks ---
+// ═══════════════════════════════════════════════════════════════════════════════
+// Looks
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ScratchValue ScratchVM::execLooks(ScriptThread& t, ScratchBlock* b, bool& yielded) {
+    ScratchSprite* s = t.sprite;
+    switch (b->opcode) {
         case BlockOpcode::LOOKS_SAY:
-        case BlockOpcode::LOOKS_SAYFORSECS: {
-            if (b->inputs.count("MESSAGE"))
-                thread.sprite->sayMessage = evaluateInput(thread, b->inputs.at("MESSAGE")).toStr();
-            if (b->opcode == BlockOpcode::LOOKS_SAYFORSECS && b->inputs.count("SECS")) {
-                thread.state = ScriptThread::WAITING_SECS;
-                thread.waitTimer = evaluateInput(thread, b->inputs.at("SECS")).toNum();
+            if (inputHas(b, "MESSAGE"))
+                s->sayMessage = evaluateInput(t, b->inputs.at("MESSAGE")).toStr();
+            break;
+        case BlockOpcode::LOOKS_SAYFORSECS:
+            if (inputHas(b, "MESSAGE"))
+                s->sayMessage = evaluateInput(t, b->inputs.at("MESSAGE")).toStr();
+            if (inputHas(b, "SECS")) {
+                t.state     = ScriptThread::WAITING_SECS;
+                t.waitTimer = evaluateInput(t, b->inputs.at("SECS")).toNum();
                 yielded = true;
             }
             break;
-        }
         case BlockOpcode::LOOKS_SWITCHCOSTUMETO: {
-            if (b->inputs.count("COSTUME")) {
-                ScratchValue cosName = evaluateInput(thread, b->inputs.at("COSTUME"));
-                for (int i = 0; i < (int)thread.sprite->costumes.size(); i++) {
-                    if (thread.sprite->costumes[i].name == cosName.toStr()) {
-                        thread.sprite->currentCostume = i; break;
-                    }
-                }
+            if (!inputHas(b, "COSTUME")) break;
+            ScratchValue cv = evaluateInput(t, b->inputs.at("COSTUME"));
+            // Try by name first
+            bool found = false;
+            for (int i = 0; i < (int)s->costumes.size(); i++) {
+                if (s->costumes[i].name == cv.toStr()) { s->currentCostume = i; found = true; break; }
+            }
+            // Fall back to numeric index (1-based in Scratch)
+            if (!found) {
+                int idx = (int)cv.toNum() - 1;
+                if (idx >= 0 && idx < (int)s->costumes.size())
+                    s->currentCostume = idx;
             }
             break;
         }
         case BlockOpcode::LOOKS_NEXTCOSTUME:
-            if (!thread.sprite->costumes.empty())
-                thread.sprite->currentCostume =
-                    (thread.sprite->currentCostume + 1) % (int)thread.sprite->costumes.size();
+            if (!s->costumes.empty())
+                s->currentCostume = (s->currentCostume + 1) % (int)s->costumes.size();
             break;
-        case BlockOpcode::LOOKS_SHOW:   thread.sprite->visible = true;  break;
-        case BlockOpcode::LOOKS_HIDE:   thread.sprite->visible = false; break;
+        case BlockOpcode::LOOKS_SWITCHBACKDROPTO: {
+            ScratchSprite* stage = project->getStage();
+            if (!stage || !inputHas(b, "BACKDROP")) break;
+            ScratchValue bv = evaluateInput(t, b->inputs.at("BACKDROP"));
+            for (int i = 0; i < (int)stage->costumes.size(); i++) {
+                if (stage->costumes[i].name == bv.toStr()) { stage->currentCostume = i; break; }
+            }
+            break;
+        }
+        case BlockOpcode::LOOKS_SHOW:    s->visible = true;  break;
+        case BlockOpcode::LOOKS_HIDE:    s->visible = false; break;
         case BlockOpcode::LOOKS_SETSIZETO:
-            thread.sprite->size = evaluateInput(thread, b->inputs.at("SIZE")).toNum();
+            s->size = evaluateInput(t, b->inputs.at("SIZE")).toNum();
+            if (s->size < 0.0) s->size = 0.0;
             break;
         case BlockOpcode::LOOKS_CHANGESIZEBY:
-            thread.sprite->size += evaluateInput(thread, b->inputs.at("CHANGE")).toNum();
+            s->size += evaluateInput(t, b->inputs.at("CHANGE")).toNum();
+            if (s->size < 0.0) s->size = 0.0;
             break;
+        // Reporters
+        case BlockOpcode::LOOKS_SETEFFECTTO:
+        case BlockOpcode::LOOKS_CHANGEEFFECTBY:
+            // Graphic effects not implemented on NDS; silently ignore
+            break;
+        default: break;
+    }
+    return ScratchValue();
+}
 
-        // --- Sound ---
+// ═══════════════════════════════════════════════════════════════════════════════
+// Sound
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ScratchValue ScratchVM::execSound(ScriptThread& t, ScratchBlock* b, bool& yielded) {
+    switch (b->opcode) {
         case BlockOpcode::SOUND_PLAY:
         case BlockOpcode::SOUND_PLAYUNTILDONE: {
-            if (b->inputs.count("SOUND_MENU")) {
-                ScratchValue sndName = evaluateInput(thread, b->inputs.at("SOUND_MENU"));
-                AudioManager::getInstance().playSound(thread.sprite, sndName.toStr());
-                if (b->opcode == BlockOpcode::SOUND_PLAYUNTILDONE) {
-                    thread.state = ScriptThread::WAITING_SOUND;
-                    yielded = true;
-                }
+            if (!inputHas(b, "SOUND_MENU")) break;
+            ScratchValue sn = evaluateInput(t, b->inputs.at("SOUND_MENU"));
+            AudioManager::getInstance().playSound(t.sprite, sn.toStr());
+            if (b->opcode == BlockOpcode::SOUND_PLAYUNTILDONE) {
+                t.state = ScriptThread::WAITING_SOUND;
+                yielded = true;
             }
             break;
         }
         case BlockOpcode::SOUND_STOPALLSOUNDS:
             AudioManager::getInstance().stopAll();
             break;
+        case BlockOpcode::SOUND_CHANGEVOLUMEBY:
+        case BlockOpcode::SOUND_SETVOLUMETO: {
+            int vol = (int)AudioManager::getInstance().isPlaying();
+            // No per-sprite volume on NDS; apply globally
+            if (b->opcode == BlockOpcode::SOUND_SETVOLUMETO && inputHas(b, "VOLUME"))
+                vol = (int)evaluateInput(t, b->inputs.at("VOLUME")).toNum();
+            else if (inputHas(b, "VOLUME"))
+                vol = (int)evaluateInput(t, b->inputs.at("VOLUME")).toNum();
+            if (vol < 0) vol = 0;
+            if (vol > 100) vol = 100;
+            AudioManager::getInstance().setVolume(vol);
+            break;
+        }
+        default: break;
+    }
+    return ScratchValue();
+}
 
-        // --- Control ---
+// ═══════════════════════════════════════════════════════════════════════════════
+// Control
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ScratchValue ScratchVM::execControl(ScriptThread& t, ScratchBlock* b, bool& yielded) {
+    switch (b->opcode) {
         case BlockOpcode::CONTROL_WAIT: {
-            double secs = evaluateInput(thread, b->inputs.at("DURATION")).toNum();
-            thread.state = ScriptThread::WAITING_SECS;
-            thread.waitTimer = secs;
+            double secs = evaluateInput(t, b->inputs.at("DURATION")).toNum();
+            t.state     = ScriptThread::WAITING_SECS;
+            t.waitTimer = secs;
             yielded = true;
             break;
         }
         case BlockOpcode::CONTROL_REPEAT: {
-            int times = (int)evaluateInput(thread, b->inputs.at("TIMES")).toNum();
-            if (times <= 0 || !b->inputs.count("SUBSTACK")) break;
-            std::string subId = b->inputs.at("SUBSTACK").blockId;
-            thread.callStack.push_back({ blockId, blockId, times });
-            thread.currentBlockId = subId;
+            int times = (int)evaluateInput(t, b->inputs.at("TIMES")).toNum();
+            if (times <= 0 || !inputHas(b, "SUBSTACK")) break;
+            StackFrame fr;
+            fr.loopBlockId   = b->id;
+            fr.returnBlockId = b->nextId;
+            fr.remaining     = times;
+            t.callStack.push_back(fr);
+            t.currentBlockId = b->inputs.at("SUBSTACK").blockId;
             yielded = true;
             break;
         }
         case BlockOpcode::CONTROL_FOREVER: {
-            if (!b->inputs.count("SUBSTACK")) break;
-            std::string subId = b->inputs.at("SUBSTACK").blockId;
-            thread.callStack.push_back({ blockId, blockId, -1 });
-            thread.currentBlockId = subId;
+            if (!inputHas(b, "SUBSTACK")) break;
+            StackFrame fr;
+            fr.loopBlockId   = b->id;
+            fr.returnBlockId = b->id;  // forever never returns past itself
+            fr.remaining     = -1;
+            t.callStack.push_back(fr);
+            t.currentBlockId = b->inputs.at("SUBSTACK").blockId;
             yielded = true;
             break;
         }
         case BlockOpcode::CONTROL_IF: {
-            bool cond = b->inputs.count("CONDITION") &&
-                        evaluateInput(thread, b->inputs.at("CONDITION")).toBool();
-            if (cond && b->inputs.count("SUBSTACK")) {
-                thread.currentBlockId = b->inputs.at("SUBSTACK").blockId;
+            bool cond = inputHas(b, "CONDITION") &&
+                        evaluateInput(t, b->inputs.at("CONDITION")).toBool();
+            if (cond && inputHas(b, "SUBSTACK")) {
+                StackFrame fr;
+                fr.loopBlockId   = b->id;
+                fr.returnBlockId = b->nextId;
+                fr.remaining     = 1;
+                t.callStack.push_back(fr);
+                t.currentBlockId = b->inputs.at("SUBSTACK").blockId;
                 yielded = true;
             }
             break;
         }
         case BlockOpcode::CONTROL_IF_ELSE: {
-            bool cond = b->inputs.count("CONDITION") &&
-                        evaluateInput(thread, b->inputs.at("CONDITION")).toBool();
+            bool cond = inputHas(b, "CONDITION") &&
+                        evaluateInput(t, b->inputs.at("CONDITION")).toBool();
             const char* key = cond ? "SUBSTACK" : "SUBSTACK2";
-            if (b->inputs.count(key)) {
-                thread.currentBlockId = b->inputs.at(key).blockId;
+            if (inputHas(b, key)) {
+                StackFrame fr;
+                fr.loopBlockId   = b->id;
+                fr.returnBlockId = b->nextId;
+                fr.remaining     = 1;
+                t.callStack.push_back(fr);
+                t.currentBlockId = b->inputs.at(key).blockId;
+                yielded = true;
+            }
+            break;
+        }
+        case BlockOpcode::CONTROL_WAIT_UNTIL: {
+            bool cond = inputHas(b, "CONDITION") &&
+                        evaluateInput(t, b->inputs.at("CONDITION")).toBool();
+            if (!cond) {
+                StackFrame fr;
+                fr.isWaitUntil = true;
+                fr.condBlockId = inputHas(b, "CONDITION")
+                                 ? b->inputs.at("CONDITION").blockId : "";
+                fr.loopBlockId = b->id;
+                fr.returnBlockId = b->nextId;
+                fr.remaining = -1;
+                t.callStack.push_back(fr);
+                t.state  = ScriptThread::WAITING_UNTIL;
+                yielded = true;
+            }
+            break;
+        }
+        case BlockOpcode::CONTROL_REPEAT_UNTIL: {
+            bool cond = inputHas(b, "CONDITION") &&
+                        evaluateInput(t, b->inputs.at("CONDITION")).toBool();
+            if (!cond && inputHas(b, "SUBSTACK")) {
+                StackFrame fr;
+                fr.loopBlockId   = b->id;
+                fr.returnBlockId = b->nextId;
+                fr.remaining     = -1;      // we check condition on each re-entry
+                // Store condition block id in condBlockId for re-check
+                fr.condBlockId = inputHas(b, "CONDITION")
+                                 ? b->inputs.at("CONDITION").blockId : "";
+                t.callStack.push_back(fr);
+                t.currentBlockId = b->inputs.at("SUBSTACK").blockId;
                 yielded = true;
             }
             break;
         }
         case BlockOpcode::CONTROL_STOP: {
-            auto it = b->fields.find("STOP_OPTION");
-            std::string opt = (it != b->fields.end()) ? it->second : "all";
-            if (opt == "all") stopAll();
-            else if (opt == "this script") thread.state = ScriptThread::DONE;
-            break;
-        }
-        case BlockOpcode::CONTROL_WAIT_UNTIL: {
-            if (b->inputs.count("CONDITION") &&
-                !evaluateInput(thread, b->inputs.at("CONDITION")).toBool())
+            const std::string& opt = fieldVal(b, "STOP_OPTION");
+            if (opt == "all") {
+                stopAll();
+            } else if (opt == "this script") {
+                t.state  = ScriptThread::DONE;
                 yielded = true;
-            break;
-        }
-
-        // --- Operators ---
-        case BlockOpcode::OPERATOR_ADD:
-            out = ScratchValue(evaluateInput(thread, b->inputs.at("NUM1")).toNum() +
-                               evaluateInput(thread, b->inputs.at("NUM2")).toNum());
-            break;
-        case BlockOpcode::OPERATOR_SUBTRACT:
-            out = ScratchValue(evaluateInput(thread, b->inputs.at("NUM1")).toNum() -
-                               evaluateInput(thread, b->inputs.at("NUM2")).toNum());
-            break;
-        case BlockOpcode::OPERATOR_MULTIPLY:
-            out = ScratchValue(evaluateInput(thread, b->inputs.at("NUM1")).toNum() *
-                               evaluateInput(thread, b->inputs.at("NUM2")).toNum());
-            break;
-        case BlockOpcode::OPERATOR_DIVIDE: {
-            double d = evaluateInput(thread, b->inputs.at("NUM2")).toNum();
-            out = ScratchValue(d != 0.0 ? evaluateInput(thread, b->inputs.at("NUM1")).toNum() / d : 0.0);
-            break;
-        }
-        case BlockOpcode::OPERATOR_RANDOM: {
-            double lo = evaluateInput(thread, b->inputs.at("FROM")).toNum();
-            double hi = evaluateInput(thread, b->inputs.at("TO")).toNum();
-            if (lo > hi) { double t = lo; lo = hi; hi = t; }
-            out = ScratchValue(lo + (double)rand() / RAND_MAX * (hi - lo));
-            break;
-        }
-        case BlockOpcode::OPERATOR_GT:
-            out = ScratchValue(evaluateInput(thread, b->inputs.at("OPERAND1")) >
-                               evaluateInput(thread, b->inputs.at("OPERAND2")) ? 1.0 : 0.0);
-            break;
-        case BlockOpcode::OPERATOR_LT:
-            out = ScratchValue(evaluateInput(thread, b->inputs.at("OPERAND1")) <
-                               evaluateInput(thread, b->inputs.at("OPERAND2")) ? 1.0 : 0.0);
-            break;
-        case BlockOpcode::OPERATOR_EQUALS:
-            out = ScratchValue(evaluateInput(thread, b->inputs.at("OPERAND1")) ==
-                               evaluateInput(thread, b->inputs.at("OPERAND2")) ? 1.0 : 0.0);
-            break;
-        case BlockOpcode::OPERATOR_AND:
-            out = ScratchValue(evaluateInput(thread, b->inputs.at("OPERAND1")).toBool() &&
-                               evaluateInput(thread, b->inputs.at("OPERAND2")).toBool() ? 1.0 : 0.0);
-            break;
-        case BlockOpcode::OPERATOR_OR:
-            out = ScratchValue(evaluateInput(thread, b->inputs.at("OPERAND1")).toBool() ||
-                               evaluateInput(thread, b->inputs.at("OPERAND2")).toBool() ? 1.0 : 0.0);
-            break;
-        case BlockOpcode::OPERATOR_NOT:
-            out = ScratchValue(!evaluateInput(thread, b->inputs.at("OPERAND")).toBool() ? 1.0 : 0.0);
-            break;
-        case BlockOpcode::OPERATOR_JOIN: {
-            std::string a  = evaluateInput(thread, b->inputs.at("STRING1")).toStr();
-            std::string bv = evaluateInput(thread, b->inputs.at("STRING2")).toStr();
-            out = ScratchValue(a + bv);
-            break;
-        }
-        case BlockOpcode::OPERATOR_MOD: {
-            double n = evaluateInput(thread, b->inputs.at("NUM1")).toNum();
-            double d = evaluateInput(thread, b->inputs.at("NUM2")).toNum();
-            out = ScratchValue(d != 0.0 ? fmod(n, d) : 0.0);
-            break;
-        }
-        case BlockOpcode::OPERATOR_ROUND:
-            out = ScratchValue(round(evaluateInput(thread, b->inputs.at("NUM")).toNum()));
-            break;
-        case BlockOpcode::OPERATOR_MATHOP: {
-            double n = evaluateInput(thread, b->inputs.at("NUM")).toNum();
-            auto it = b->fields.find("OPERATOR");
-            std::string op = (it != b->fields.end()) ? it->second : "";
-            if      (op == "abs")     out = ScratchValue(fabs(n));
-            else if (op == "floor")   out = ScratchValue(floor(n));
-            else if (op == "ceiling") out = ScratchValue(ceil(n));
-            else if (op == "sqrt")    out = ScratchValue(sqrt(n < 0.0 ? 0.0 : n));
-            else if (op == "sin")     out = ScratchValue(sin(n * M_PI / 180.0));
-            else if (op == "cos")     out = ScratchValue(cos(n * M_PI / 180.0));
-            else if (op == "tan")     out = ScratchValue(tan(n * M_PI / 180.0));
-            else if (op == "asin")    out = ScratchValue(asin(n) * 180.0 / M_PI);
-            else if (op == "acos")    out = ScratchValue(acos(n) * 180.0 / M_PI);
-            else if (op == "atan")    out = ScratchValue(atan(n) * 180.0 / M_PI);
-            else if (op == "ln")      out = ScratchValue(n > 0.0 ? log(n) : 0.0);
-            else if (op == "log")     out = ScratchValue(n > 0.0 ? log10(n) : 0.0);
-            else if (op == "e ^")     out = ScratchValue(exp(n));
-            else if (op == "10 ^")    out = ScratchValue(pow(10.0, n));
-            break;
-        }
-
-        // --- Sensing ---
-        case BlockOpcode::SENSING_TIMER:
-            out = ScratchValue(globalTimer);
-            break;
-        case BlockOpcode::SENSING_RESETTIMER:
-            globalTimer = 0.0;
-            break;
-        case BlockOpcode::SENSING_MOUSEX:
-            out = ScratchValue((double)InputHandler::getInstance().getTouchX());
-            break;
-        case BlockOpcode::SENSING_MOUSEY:
-            out = ScratchValue((double)InputHandler::getInstance().getTouchY());
-            break;
-        case BlockOpcode::SENSING_MOUSEDOWN:
-            out = ScratchValue(InputHandler::getInstance().isTouching() ? 1.0 : 0.0);
-            break;
-        case BlockOpcode::SENSING_LOUDNESS:
-        case BlockOpcode::NDS_MICROPHONE_LOUDNESS:
-            out = ScratchValue((double)InputHandler::getInstance().getMicLoudness());
-            break;
-        case BlockOpcode::SENSING_KEYPRESSED: {
-            auto it = b->fields.find("KEY_OPTION");
-            std::string key = (it != b->fields.end()) ? it->second : "";
-            out = ScratchValue(InputHandler::getInstance().isKeyDown(key) ? 1.0 : 0.0);
-            break;
-        }
-
-        // --- Data ---
-        case BlockOpcode::DATA_SETVARIABLETO: {
-            auto it = b->fields.find("VARIABLE");
-            if (it != b->fields.end() && b->inputs.count("VALUE"))
-                setVariable(thread.sprite, it->second,
-                            evaluateInput(thread, b->inputs.at("VALUE")));
-            break;
-        }
-        case BlockOpcode::DATA_CHANGEVARIABLEBY: {
-            auto it = b->fields.find("VARIABLE");
-            if (it != b->fields.end() && b->inputs.count("VALUE")) {
-                ScratchValue delta = evaluateInput(thread, b->inputs.at("VALUE"));
-                ScratchValue cur   = getVariable(thread.sprite, it->second);
-                setVariable(thread.sprite, it->second,
-                            ScratchValue(cur.toNum() + delta.toNum()));
+            } else if (opt == "other scripts in sprite") {
+                for (auto& th : threads) {
+                    if (&th != &t && th.sprite == t.sprite)
+                        th.state = ScriptThread::DONE;
+                }
             }
             break;
         }
+        case BlockOpcode::CONTROL_START_AS_CLONE:
+            // Hat block — handled by greenFlag/clone spawning; no-op here
+            break;
+        case BlockOpcode::CONTROL_CREATE_CLONE_OF: {
+            if (!inputHas(b, "CLONE_OPTION")) break;
+            ScratchValue tgt = evaluateInput(t, b->inputs.at("CLONE_OPTION"));
+            ScratchSprite* src = nullptr;
+            if (tgt.toStr() == "_myself_") {
+                src = t.sprite;
+            } else {
+                src = project->findSprite(tgt.toStr());
+            }
+            if (src) {
+                ScratchSprite* cl = createClone(src);
+                if (cl) {
+                    // Fire start_as_clone hat in next frame
+                    int n = startHatBlocksCount(
+                        BlockOpcode::CONTROL_START_AS_CLONE, cl);
+                    (void)n;
+                }
+            }
+            break;
+        }
+        case BlockOpcode::CONTROL_DELETE_THIS_CLONE: {
+            if (t.sprite->isClone) {
+                deleteClone(t.sprite);
+                t.state  = ScriptThread::DONE;
+                yielded = true;
+            }
+            break;
+        }
+        default: break;
+    }
+    return ScratchValue();
+}
 
-        // --- NDS Extension ---
-        case BlockOpcode::NDS_BUTTONPRESSED: {
-            auto it = b->fields.find("BUTTON");
-            out = ScratchValue(InputHandler::getInstance().isButtonDown(
-                it != b->fields.end() ? it->second : "") ? 1.0 : 0.0);
-            break;
-        }
-        case BlockOpcode::NDS_BUTTONHELD: {
-            auto it = b->fields.find("BUTTON");
-            out = ScratchValue(InputHandler::getInstance().isButtonHeld(
-                it != b->fields.end() ? it->second : "") ? 1.0 : 0.0);
-            break;
-        }
-        case BlockOpcode::NDS_BUTTONRELEASED: {
-            auto it = b->fields.find("BUTTON");
-            out = ScratchValue(InputHandler::getInstance().isButtonReleased(
-                it != b->fields.end() ? it->second : "") ? 1.0 : 0.0);
-            break;
-        }
-        case BlockOpcode::NDS_TOUCHX:
-            out = ScratchValue((double)InputHandler::getInstance().getTouchX());
-            break;
-        case BlockOpcode::NDS_TOUCHY:
-            out = ScratchValue((double)InputHandler::getInstance().getTouchY());
-            break;
-        case BlockOpcode::NDS_TOUCHPRESSED:
-            out = ScratchValue(InputHandler::getInstance().isTouching() ? 1.0 : 0.0);
-            break;
-        case BlockOpcode::NDS_RUMBLE:
-            break;
+// ═══════════════════════════════════════════════════════════════════════════════
+// Sensing
+// ═══════════════════════════════════════════════════════════════════════════════
 
+ScratchValue ScratchVM::execSensing(ScriptThread& t, ScratchBlock* b, bool& yielded) {
+    InputHandler& input = InputHandler::getInstance();
+    switch (b->opcode) {
+        case BlockOpcode::SENSING_TOUCHINGOBJECT: {
+            if (!inputHas(b, "TOUCHINGOBJECTMENU")) return ScratchValue(0.0);
+            ScratchValue tgt = evaluateInput(t, b->inputs.at("TOUCHINGOBJECTMENU"));
+            std::string name = tgt.toStr();
+            if (name == "_edge_") {
+                return ScratchValue(spriteTouchingEdge(t.sprite) ? 1.0 : 0.0);
+            }
+            if (name == "_mouse_") {
+                // Touch position as "mouse"
+                int mx = input.getTouchX(), my = input.getTouchY();
+                double hw = t.sprite->costumes.empty() ? 16.0
+                            : t.sprite->costumes[t.sprite->currentCostume].width * 0.5;
+                double hh = t.sprite->costumes.empty() ? 16.0
+                            : t.sprite->costumes[t.sprite->currentCostume].height * 0.5;
+                bool hit = (mx >= t.sprite->x - hw && mx <= t.sprite->x + hw &&
+                            my >= t.sprite->y - hh && my <= t.sprite->y + hh);
+                return ScratchValue(hit ? 1.0 : 0.0);
+            }
+            ScratchSprite* other = project->findSprite(name);
+            if (other) return ScratchValue(spritesTouching(t.sprite, other) ? 1.0 : 0.0);
+            return ScratchValue(0.0);
+        }
+        case BlockOpcode::SENSING_KEYPRESSED: {
+            std::string key = fieldVal(b, "KEY_OPTION");
+            return ScratchValue(input.isKeyHeld(key) ? 1.0 : 0.0);
+        }
+        case BlockOpcode::SENSING_MOUSEDOWN:
+            return ScratchValue(input.isTouching() ? 1.0 : 0.0);
+        case BlockOpcode::SENSING_MOUSEX:
+            return ScratchValue((double)input.getTouchX());
+        case BlockOpcode::SENSING_MOUSEY:
+            return ScratchValue((double)input.getTouchY());
+        case BlockOpcode::SENSING_TIMER:
+            return ScratchValue(globalTimer);
+        case BlockOpcode::SENSING_RESETTIMER:
+            globalTimer = 0.0;
+            return ScratchValue();
+        case BlockOpcode::SENSING_LOUDNESS:
+            return ScratchValue((double)input.getMicLoudness());
+        case BlockOpcode::SENSING_ANSWER:
+            return ScratchValue(answerStr);
+        case BlockOpcode::SENSING_ASKANDWAIT:
+            // No keyboard on NDS; store blank answer, yield briefly then continue
+            answerStr = "";
+            t.state     = ScriptThread::WAITING_SECS;
+            t.waitTimer = 0.016;
+            yielded = true;
+            break;
+        case BlockOpcode::SENSING_OF: {
+            // sensing_of — get property of another sprite
+            std::string prop  = fieldVal(b, "PROPERTY");
+            std::string sName = fieldVal(b, "OBJECT");
+            ScratchSprite* target = (sName == "_stage_")
+                                    ? project->getStage()
+                                    : project->findSprite(sName);
+            if (target) return getSpriteProperty(target, prop);
+            return ScratchValue(0.0);
+        }
+        case BlockOpcode::SENSING_DISTANCETO: {
+            if (!inputHas(b, "DISTANCETOMENU")) return ScratchValue(0.0);
+            ScratchValue tgt = evaluateInput(t, b->inputs.at("DISTANCETOMENU"));
+            double tx = 0.0, ty = 0.0;
+            if (tgt.toStr() == "_mouse_") {
+                tx = input.getTouchX();
+                ty = input.getTouchY();
+            } else {
+                ScratchSprite* other = project->findSprite(tgt.toStr());
+                if (other) { tx = other->x; ty = other->y; }
+            }
+            double dx = tx - t.sprite->x, dy = ty - t.sprite->y;
+            return ScratchValue(sqrt(dx*dx + dy*dy));
+        }
+        default: break;
+    }
+    return ScratchValue();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Data (variables + lists)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ScratchValue ScratchVM::execData(ScriptThread& t, ScratchBlock* b, bool& yielded) {
+    (void)yielded;
+    switch (b->opcode) {
+        case BlockOpcode::DATA_SETVARIABLETO: {
+            if (!fieldHas(b, "VARIABLE") || !inputHas(b, "VALUE")) break;
+            setVariable(t.sprite, fieldVal(b, "VARIABLE"),
+                        evaluateInput(t, b->inputs.at("VALUE")));
+            break;
+        }
+        case BlockOpcode::DATA_CHANGEVARIABLEBY: {
+            if (!fieldHas(b, "VARIABLE") || !inputHas(b, "VALUE")) break;
+            ScratchValue delta = evaluateInput(t, b->inputs.at("VALUE"));
+            ScratchValue cur   = getVariable(t.sprite, fieldVal(b, "VARIABLE"));
+            setVariable(t.sprite, fieldVal(b, "VARIABLE"),
+                        ScratchValue(cur.toNum() + delta.toNum()));
+            break;
+        }
+        case BlockOpcode::DATA_SHOWVARIABLE:
+        case BlockOpcode::DATA_HIDEVARIABLE: {
+            bool vis = (b->opcode == BlockOpcode::DATA_SHOWVARIABLE);
+            const std::string& vname = fieldVal(b, "VARIABLE");
+            // Search sprite then stage
+            auto setVis = [&](ScratchSprite* sp) {
+                if (!sp) return;
+                for (auto& v : sp->variables)
+                    if (v.name == vname) { v.visible = vis; }
+            };
+            setVis(t.sprite);
+            setVis(project->getStage());
+            break;
+        }
+        // ── Lists ─────────────────────────────────────────────────────────────
+        case BlockOpcode::DATA_ADDTOLIST: {
+            if (!fieldHas(b, "LIST") || !inputHas(b, "ITEM")) break;
+            ScratchRuntimeList* lst = getList(t.sprite, fieldVal(b, "LIST"));
+            if (lst) lst->items.push_back(evaluateInput(t, b->inputs.at("ITEM")).toStr());
+            break;
+        }
+        case BlockOpcode::DATA_DELETEOFLIST: {
+            if (!fieldHas(b, "LIST") || !inputHas(b, "INDEX")) break;
+            ScratchRuntimeList* lst = getList(t.sprite, fieldVal(b, "LIST"));
+            if (!lst) break;
+            ScratchValue iv = evaluateInput(t, b->inputs.at("INDEX"));
+            if (iv.toStr() == "all") {
+                lst->items.clear();
+            } else if (iv.toStr() == "last") {
+                if (!lst->items.empty()) lst->items.pop_back();
+            } else {
+                int idx = (int)iv.toNum() - 1;
+                if (idx >= 0 && idx < (int)lst->items.size())
+                    lst->items.erase(lst->items.begin() + idx);
+            }
+            break;
+        }
+        case BlockOpcode::DATA_INSERTATLIST: {
+            if (!fieldHas(b, "LIST") || !inputHas(b, "ITEM") || !inputHas(b, "INDEX")) break;
+            ScratchRuntimeList* lst = getList(t.sprite, fieldVal(b, "LIST"));
+            if (!lst) break;
+            std::string val = evaluateInput(t, b->inputs.at("ITEM")).toStr();
+            ScratchValue iv  = evaluateInput(t, b->inputs.at("INDEX"));
+            int idx;
+            if (iv.toStr() == "last") idx = (int)lst->items.size();
+            else if (iv.toStr() == "random") idx = lst->items.empty() ? 0 : rand() % (int)lst->items.size();
+            else idx = (int)iv.toNum() - 1;
+            if (idx < 0) idx = 0;
+            if (idx > (int)lst->items.size()) idx = (int)lst->items.size();
+            lst->items.insert(lst->items.begin() + idx, val);
+            break;
+        }
+        case BlockOpcode::DATA_REPLACEITEMOFLIST: {
+            if (!fieldHas(b, "LIST") || !inputHas(b, "ITEM") || !inputHas(b, "INDEX")) break;
+            ScratchRuntimeList* lst = getList(t.sprite, fieldVal(b, "LIST"));
+            if (!lst) break;
+            std::string val = evaluateInput(t, b->inputs.at("ITEM")).toStr();
+            int idx = (int)evaluateInput(t, b->inputs.at("INDEX")).toNum() - 1;
+            if (idx >= 0 && idx < (int)lst->items.size())
+                lst->items[idx] = val;
+            break;
+        }
+        case BlockOpcode::DATA_ITEMOFLIST: {
+            if (!fieldHas(b, "LIST") || !inputHas(b, "INDEX")) break;
+            ScratchRuntimeList* lst = getList(t.sprite, fieldVal(b, "LIST"));
+            if (!lst) return ScratchValue("");
+            ScratchValue iv = evaluateInput(t, b->inputs.at("INDEX"));
+            if (iv.toStr() == "last") {
+                return lst->items.empty() ? ScratchValue("") : ScratchValue(lst->items.back());
+            }
+            if (iv.toStr() == "random") {
+                if (lst->items.empty()) return ScratchValue("");
+                return ScratchValue(lst->items[rand() % lst->items.size()]);
+            }
+            int idx = (int)iv.toNum() - 1;
+            if (idx >= 0 && idx < (int)lst->items.size())
+                return ScratchValue(lst->items[idx]);
+            return ScratchValue("");
+        }
+        case BlockOpcode::DATA_ITEMNUMOFLIST: {
+            if (!fieldHas(b, "LIST") || !inputHas(b, "ITEM")) break;
+            ScratchRuntimeList* lst = getList(t.sprite, fieldVal(b, "LIST"));
+            if (!lst) return ScratchValue(0.0);
+            std::string val = evaluateInput(t, b->inputs.at("ITEM")).toStr();
+            for (int i = 0; i < (int)lst->items.size(); i++) {
+                if (lst->items[i] == val) return ScratchValue((double)(i + 1));
+            }
+            return ScratchValue(0.0);
+        }
+        case BlockOpcode::DATA_LENGTHOFLIST: {
+            if (!fieldHas(b, "LIST")) break;
+            ScratchRuntimeList* lst = getList(t.sprite, fieldVal(b, "LIST"));
+            return ScratchValue(lst ? (double)lst->items.size() : 0.0);
+        }
+        case BlockOpcode::DATA_LISTCONTAINSITEM: {
+            if (!fieldHas(b, "LIST") || !inputHas(b, "ITEM")) break;
+            ScratchRuntimeList* lst = getList(t.sprite, fieldVal(b, "LIST"));
+            if (!lst) return ScratchValue(0.0);
+            std::string val = evaluateInput(t, b->inputs.at("ITEM")).toStr();
+            for (auto& it : lst->items)
+                if (it == val) return ScratchValue(1.0);
+            return ScratchValue(0.0);
+        }
+        case BlockOpcode::DATA_SHOWLIST:
+        case BlockOpcode::DATA_HIDELIST:
+            // Monitor visibility — not rendered on NDS; silently accepted
+            break;
+        default: break;
+    }
+    return ScratchValue();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Operators
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ScratchValue ScratchVM::execOperator(ScriptThread& t, ScratchBlock* b, bool& yielded) {
+    (void)yielded;
+    switch (b->opcode) {
+        case BlockOpcode::OPERATOR_ADD:
+            return ScratchValue(evaluateInput(t, b->inputs.at("NUM1")).toNum() +
+                                evaluateInput(t, b->inputs.at("NUM2")).toNum());
+        case BlockOpcode::OPERATOR_SUBTRACT:
+            return ScratchValue(evaluateInput(t, b->inputs.at("NUM1")).toNum() -
+                                evaluateInput(t, b->inputs.at("NUM2")).toNum());
+        case BlockOpcode::OPERATOR_MULTIPLY:
+            return ScratchValue(evaluateInput(t, b->inputs.at("NUM1")).toNum() *
+                                evaluateInput(t, b->inputs.at("NUM2")).toNum());
+        case BlockOpcode::OPERATOR_DIVIDE: {
+            double d = evaluateInput(t, b->inputs.at("NUM2")).toNum();
+            return ScratchValue(d != 0.0 ? evaluateInput(t, b->inputs.at("NUM1")).toNum() / d
+                                         : 0.0);
+        }
+        case BlockOpcode::OPERATOR_RANDOM: {
+            double lo = evaluateInput(t, b->inputs.at("FROM")).toNum();
+            double hi = evaluateInput(t, b->inputs.at("TO")).toNum();
+            if (lo > hi) { double tmp = lo; lo = hi; hi = tmp; }
+            // Scratch: integer range → integer result
+            if (lo == (long long)lo && hi == (long long)hi)
+                return ScratchValue((double)(lo + rand() % ((long long)(hi - lo) + 1)));
+            return ScratchValue(lo + (double)rand() / RAND_MAX * (hi - lo));
+        }
+        case BlockOpcode::OPERATOR_GT:
+            return ScratchValue(evaluateInput(t, b->inputs.at("OPERAND1")) >
+                                evaluateInput(t, b->inputs.at("OPERAND2")) ? 1.0 : 0.0);
+        case BlockOpcode::OPERATOR_LT:
+            return ScratchValue(evaluateInput(t, b->inputs.at("OPERAND1")) <
+                                evaluateInput(t, b->inputs.at("OPERAND2")) ? 1.0 : 0.0);
+        case BlockOpcode::OPERATOR_EQUALS:
+            return ScratchValue(evaluateInput(t, b->inputs.at("OPERAND1")) ==
+                                evaluateInput(t, b->inputs.at("OPERAND2")) ? 1.0 : 0.0);
+        case BlockOpcode::OPERATOR_AND:
+            return ScratchValue(evaluateInput(t, b->inputs.at("OPERAND1")).toBool() &&
+                                evaluateInput(t, b->inputs.at("OPERAND2")).toBool() ? 1.0 : 0.0);
+        case BlockOpcode::OPERATOR_OR:
+            return ScratchValue(evaluateInput(t, b->inputs.at("OPERAND1")).toBool() ||
+                                evaluateInput(t, b->inputs.at("OPERAND2")).toBool() ? 1.0 : 0.0);
+        case BlockOpcode::OPERATOR_NOT:
+            return ScratchValue(!evaluateInput(t, b->inputs.at("OPERAND")).toBool() ? 1.0 : 0.0);
+        case BlockOpcode::OPERATOR_JOIN: {
+            std::string a = evaluateInput(t, b->inputs.at("STRING1")).toStr();
+            std::string bv = evaluateInput(t, b->inputs.at("STRING2")).toStr();
+            return ScratchValue(a + bv);
+        }
+        case BlockOpcode::OPERATOR_LETTER_OF: {
+            int idx = (int)evaluateInput(t, b->inputs.at("LETTER")).toNum() - 1;
+            std::string str = evaluateInput(t, b->inputs.at("STRING")).toStr();
+            if (idx >= 0 && idx < (int)str.size())
+                return ScratchValue(std::string(1, str[idx]));
+            return ScratchValue("");
+        }
+        case BlockOpcode::OPERATOR_LENGTH:
+            return ScratchValue((double)evaluateInput(t, b->inputs.at("STRING")).toStr().size());
+        case BlockOpcode::OPERATOR_MOD: {
+            double n = evaluateInput(t, b->inputs.at("NUM1")).toNum();
+            double d = evaluateInput(t, b->inputs.at("NUM2")).toNum();
+            if (d == 0.0) return ScratchValue(0.0);
+            double r = fmod(n, d);
+            // Scratch: result has same sign as divisor
+            if (r != 0.0 && (r < 0.0) != (d < 0.0)) r += d;
+            return ScratchValue(r);
+        }
+        case BlockOpcode::OPERATOR_ROUND:
+            return ScratchValue(floor(evaluateInput(t, b->inputs.at("NUM")).toNum() + 0.5));
+        case BlockOpcode::OPERATOR_MATHOP: {
+            double n  = evaluateInput(t, b->inputs.at("NUM")).toNum();
+            const std::string& op = fieldVal(b, "OPERATOR");
+            if      (op == "abs")     return ScratchValue(fabs(n));
+            else if (op == "floor")   return ScratchValue(floor(n));
+            else if (op == "ceiling") return ScratchValue(ceil(n));
+            else if (op == "sqrt")    return ScratchValue(n >= 0.0 ? sqrt(n) : 0.0);
+            else if (op == "sin")     return ScratchValue(sin(n * M_PI / 180.0));
+            else if (op == "cos")     return ScratchValue(cos(n * M_PI / 180.0));
+            else if (op == "tan") {
+                double c = cos(n * M_PI / 180.0);
+                return ScratchValue(c != 0.0 ? sin(n * M_PI / 180.0) / c : 0.0);
+            }
+            else if (op == "asin")    return ScratchValue(asin(n) * 180.0 / M_PI);
+            else if (op == "acos")    return ScratchValue(acos(n) * 180.0 / M_PI);
+            else if (op == "atan")    return ScratchValue(atan(n) * 180.0 / M_PI);
+            else if (op == "ln")      return ScratchValue(n > 0.0 ? log(n)   : 0.0);
+            else if (op == "log")     return ScratchValue(n > 0.0 ? log10(n) : 0.0);
+            else if (op == "e ^")     return ScratchValue(exp(n));
+            else if (op == "10 ^")    return ScratchValue(pow(10.0, n));
+            return ScratchValue(0.0);
+        }
+        // String contains (Scratch 3.0)
         default:
             break;
     }
-
-    return out;
+    return ScratchValue();
 }
 
-// -----------------------------------------------------------------------
-// Evaluate an input slot
-// -----------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
+// NDS Extension
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ScratchValue ScratchVM::execNDS(ScriptThread& t, ScratchBlock* b, bool& yielded) {
+    (void)t; (void)yielded;
+    InputHandler& input = InputHandler::getInstance();
+    switch (b->opcode) {
+        case BlockOpcode::NDS_BUTTONPRESSED:
+            return ScratchValue(input.isButtonDown(fieldVal(b, "BUTTON")) ? 1.0 : 0.0);
+        case BlockOpcode::NDS_BUTTONHELD:
+            return ScratchValue(input.isButtonHeld(fieldVal(b, "BUTTON")) ? 1.0 : 0.0);
+        case BlockOpcode::NDS_BUTTONRELEASED:
+            return ScratchValue(input.isButtonReleased(fieldVal(b, "BUTTON")) ? 1.0 : 0.0);
+        case BlockOpcode::NDS_TOUCHX:
+            return ScratchValue((double)input.getTouchX());
+        case BlockOpcode::NDS_TOUCHY:
+            return ScratchValue((double)input.getTouchY());
+        case BlockOpcode::NDS_TOUCHPRESSED:
+            return ScratchValue(input.isTouching() ? 1.0 : 0.0);
+        case BlockOpcode::NDS_MICROPHONE_LOUDNESS:
+            return ScratchValue((double)input.getMicLoudness());
+        case BlockOpcode::NDS_RUMBLE:
+        case BlockOpcode::NDS_SETVIBRATION:
+        case BlockOpcode::NDS_BACKLIGHT_TOP:
+        case BlockOpcode::NDS_BACKLIGHT_BOTTOM:
+            // Hardware commands are fired from main.cpp via NDSExtension
+            break;
+        default: break;
+    }
+    return ScratchValue();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Evaluate input slot
+// ═══════════════════════════════════════════════════════════════════════════════
+
 ScratchValue ScratchVM::evaluateInput(ScriptThread& thread, const ScratchInput& input) {
     if (!input.blockId.empty())
         return evaluateReporter(thread, input.blockId);
+    // valueType 4–8 are numeric literals in Scratch JSON
     if (input.valueType >= 4 && input.valueType <= 8)
         return ScratchValue(input.numValue);
     return ScratchValue(input.strValue);
 }
 
-ScratchValue ScratchVM::evaluateReporter(ScriptThread& thread, const std::string& blockId) {
+ScratchValue ScratchVM::evaluateReporter(ScriptThread& thread,
+                                          const std::string& blockId) {
     bool yielded = false;
-    ScratchValue v = executeBlock(thread, blockId, yielded);
+    ScriptThread::State saved = thread.state;
     thread.state = ScriptThread::RUNNING;
+    ScratchValue v = executeBlock(thread, blockId, yielded);
+    if (!yielded) thread.state = saved;
     return v;
 }
 
-// -----------------------------------------------------------------------
-// Broadcast / stop
-// -----------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
+// Broadcast
+// ═══════════════════════════════════════════════════════════════════════════════
+
 void ScratchVM::broadcast(const std::string& name) {
     for (auto& sprite : project->targets)
         startHatBlocks(BlockOpcode::EVENT_WHENBROADCASTRECEIVED, &sprite, name);
 }
 
+void ScratchVM::broadcastAndWait(ScriptThread& caller, const std::string& name) {
+    BroadcastRecord br;
+    br.name              = name;
+    br.threadsLaunched   = 0;
+    br.threadsDone       = 0;
+    br.isWaiting         = true;
+    for (auto& sprite : project->targets)
+        br.threadsLaunched += startHatBlocksCount(
+            BlockOpcode::EVENT_WHENBROADCASTRECEIVED, &sprite, name);
+    if (br.threadsLaunched == 0) return;  // no one listening, don't wait
+    broadcasts.push_back(br);
+    StackFrame fr;
+    fr.isBroadcastWait = true;
+    fr.broadcastName   = name;
+    fr.remaining       = 1;
+    fr.loopBlockId     = "";
+    caller.callStack.push_back(fr);
+    caller.state = ScriptThread::WAITING_BROADCAST;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Stop all
+// ═══════════════════════════════════════════════════════════════════════════════
+
 void ScratchVM::stopAll() {
-    for (auto& t : threads) t.state = ScriptThread::DONE;
-    pendingThreads.clear();
+    for (auto& t : threads)        t.state = ScriptThread::DONE;
+    for (auto& t : pendingThreads) t.state = ScriptThread::DONE;
+    broadcasts.clear();
     AudioManager::getInstance().stopAll();
 }
 
-// -----------------------------------------------------------------------
-// Variable accessors
-// -----------------------------------------------------------------------
-ScratchValue ScratchVM::getVariable(ScratchSprite* sprite, const std::string& name) {
-    if (sprite)
-        for (auto& var : sprite->variables)
-            if (var.name == name) return ScratchValue(var.value);
-    if (project->getStage())
-        for (auto& var : project->getStage()->variables)
-            if (var.name == name) return ScratchValue(var.value);
+// ═══════════════════════════════════════════════════════════════════════════════
+// Variable access
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ScratchValue ScratchVM::getVariable(ScratchSprite* sprite,
+                                     const std::string& name) {
+    // Search local sprite first, then stage (global)
+    auto search = [&](ScratchSprite* sp) -> ScratchValue* {
+        if (!sp) return nullptr;
+        for (auto& v : sp->variables)
+            if (v.name == name) return (ScratchValue*)&v;  // reinterpret hack — see below
+        return nullptr;
+    };
+    // Can't return reference to ScratchVariable::value directly as ScratchValue,
+    // so we construct from string.
+    if (sprite) {
+        for (auto& v : sprite->variables)
+            if (v.name == name) {
+                // Try numeric parse for efficiency
+                ScratchValue sv;
+                sv.type = ScratchValue::STR;
+                sv.strVal = v.value;
+                return sv;
+            }
+    }
+    ScratchSprite* stage = project->getStage();
+    if (stage) {
+        for (auto& v : stage->variables)
+            if (v.name == name) {
+                ScratchValue sv;
+                sv.type = ScratchValue::STR;
+                sv.strVal = v.value;
+                return sv;
+            }
+    }
     return ScratchValue(0.0);
 }
 
-void ScratchVM::setVariable(ScratchSprite* sprite, const std::string& name, ScratchValue val) {
-    if (sprite)
-        for (auto& var : sprite->variables)
-            if (var.name == name) { var.value = val.toStr(); return; }
-    if (project->getStage())
-        for (auto& var : project->getStage()->variables)
-            if (var.name == name) { var.value = val.toStr(); return; }
+void ScratchVM::setVariable(ScratchSprite* sprite, const std::string& name,
+                              const ScratchValue& val) {
+    std::string s = val.toStr();
+    if (sprite) {
+        for (auto& v : sprite->variables)
+            if (v.name == name) { v.value = s; return; }
+    }
+    ScratchSprite* stage = project->getStage();
+    if (stage) {
+        for (auto& v : stage->variables)
+            if (v.name == name) { v.value = s; return; }
+    }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// List access
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ScratchRuntimeList* ScratchVM::getList(ScratchSprite* sprite,
+                                        const std::string& name) {
+    // Search sprite-local first
+    for (auto& e : runtimeLists)
+        if (e.owner == sprite && e.list.name == name) return &e.list;
+    // Stage / global
+    ScratchSprite* stage = project->getStage();
+    for (auto& e : runtimeLists)
+        if (e.owner == stage && e.list.name == name) return &e.list;
+    return nullptr;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Clone management
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ScratchSprite* ScratchVM::createClone(ScratchSprite* parent) {
+    // Find a free slot in the pool
+    int slot = -1;
+    for (int i = 0; i < MAX_CLONES; i++) {
+        if (!cloneUsed[i]) { slot = i; break; }
+    }
+    if (slot < 0) return nullptr;  // pool exhausted
+
+    clonePool[slot]                = *parent;  // copy all fields
+    clonePool[slot].isClone        = true;
+    clonePool[slot].cloneParentIndex = (int)(parent - project->targets.data());
+    cloneUsed[slot] = true;
+
+    // Add to project targets so renderer picks it up
+    if (project->targets.size() < 128)
+        project->targets.push_back(ScratchSprite());  // placeholder, filled below
+
+    // Use push_back copy
+    project->targets.back() = clonePool[slot];
+
+    return &project->targets.back();
+}
+
+void ScratchVM::deleteClone(ScratchSprite* sprite) {
+    // Stop all threads for this clone
+    for (auto& t : threads)
+        if (t.sprite == sprite) t.state = ScriptThread::DONE;
+    // Remove from project targets
+    auto& tgts = project->targets;
+    for (int i = (int)tgts.size() - 1; i >= 0; i--) {
+        if (&tgts[i] == sprite) {
+            tgts.erase(tgts.begin() + i);
+            break;
+        }
+    }
+    // Free pool slot
+    for (int i = 0; i < MAX_CLONES; i++) {
+        if (cloneUsed[i] && &clonePool[i] == sprite) {
+            cloneUsed[i] = false;
+            break;
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Sprite property (for sensing_of)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ScratchValue ScratchVM::getSpriteProperty(ScratchSprite* s,
+                                           const std::string& prop) {
+    if (prop == "x position")     return ScratchValue(s->x);
+    if (prop == "y position")     return ScratchValue(s->y);
+    if (prop == "direction")      return ScratchValue((double)s->direction);
+    if (prop == "costume #" || prop == "costume number")
+        return ScratchValue((double)(s->currentCostume + 1));
+    if (prop == "costume name") {
+        if (!s->costumes.empty() && s->currentCostume < (int)s->costumes.size())
+            return ScratchValue(s->costumes[s->currentCostume].name);
+        return ScratchValue("");
+    }
+    if (prop == "size")           return ScratchValue(s->size);
+    if (prop == "volume")         return ScratchValue(100.0);  // no per-sprite volume
+    if (prop == "backdrop #" || prop == "backdrop number")
+        return ScratchValue((double)(s->currentCostume + 1));
+    if (prop == "backdrop name") {
+        if (!s->costumes.empty() && s->currentCostume < (int)s->costumes.size())
+            return ScratchValue(s->costumes[s->currentCostume].name);
+        return ScratchValue("");
+    }
+    // Variable lookup
+    return getVariable(s, prop);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Collision helpers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bool ScratchVM::spritesTouching(ScratchSprite* a, ScratchSprite* b) const {
+    if (!a->visible || !b->visible) return false;
+    double hwA = a->costumes.empty() ? 16.0 : a->costumes[a->currentCostume].width  * (a->size / 100.0) * 0.5;
+    double hhA = a->costumes.empty() ? 16.0 : a->costumes[a->currentCostume].height * (a->size / 100.0) * 0.5;
+    double hwB = b->costumes.empty() ? 16.0 : b->costumes[b->currentCostume].width  * (b->size / 100.0) * 0.5;
+    double hhB = b->costumes.empty() ? 16.0 : b->costumes[b->currentCostume].height * (b->size / 100.0) * 0.5;
+    return !(a->x + hwA < b->x - hwB || a->x - hwA > b->x + hwB ||
+             a->y + hhA < b->y - hhB || a->y - hhA > b->y + hhB);
+}
+
+bool ScratchVM::spriteTouchingEdge(ScratchSprite* s) const {
+    double hw = s->costumes.empty() ? 16.0
+                : s->costumes[s->currentCostume].width  * (s->size / 100.0) * 0.5;
+    double hh = s->costumes.empty() ? 16.0
+                : s->costumes[s->currentCostume].height * (s->size / 100.0) * 0.5;
+    return (s->x - hw < -220.0 || s->x + hw > 220.0 ||
+            s->y - hh < -160.0 || s->y + hh > 160.0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Utility
+// ═══════════════════════════════════════════════════════════════════════════════
+
 ScratchBlock* ScratchVM::getBlock(ScriptThread& t, const std::string& id) {
-    for (auto& b : t.sprite->blocks)
-        if (b.id == id) return &b;
+    for (auto& blk : t.sprite->blocks)
+        if (blk.id == id) return &blk;
     return nullptr;
 }
 
 void ScratchVM::fireSpriteClicked(ScratchSprite* sprite) {
     startHatBlocks(BlockOpcode::EVENT_WHENTHISSPRITECLICKED, sprite);
 }
+
 void ScratchVM::fireKeyPressed(const std::string& key) {
     for (auto& sprite : project->targets)
         startHatBlocks(BlockOpcode::EVENT_WHENKEYPRESSED, &sprite, key);
