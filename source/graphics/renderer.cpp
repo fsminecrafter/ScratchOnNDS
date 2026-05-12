@@ -128,23 +128,22 @@ static void linearToTiled8(const uint8_t* src, uint8_t* dst, int w, int h) {
 void Renderer::init() {
     memset(oamUsed, 0, sizeof(oamUsed));
     nextOam = 0;
-    bgHandle = -1;
     backdropLoaded = false;
-
-    // Palette allocator
     memset(palSlotUsed, 0, sizeof(palSlotUsed));
-    palSlotUsed[0] = true;  // slot 0 reserved
-
-    // Zero out the entire OAM palette once
+    palSlotUsed[0] = true;
     memset(SPRITE_PALETTE, 0, 256 * sizeof(uint16_t));
 
     oamInit(&oamMain, SpriteMapping_1D_32, false);
-    bgHandle = bgInit(3, BgType_Bmp8, BgSize_B8_256x256, 0, 0);
+
+    // BgType_Bmp16 matches renderBackdrop's RGB555 writes; layer 3 in mode 5
+    bgHandle = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
+    bgSetScroll(bgHandle, 0, 0);
+    bgUpdate();
 
     consoleInit(&bottomConsole, 0, BgType_Text4bpp, BgSize_T_256x256,
                 2, 0, false, true);
 
-    memset(BG_BITMAP_VRAM, 0, 256 * 192);
+    memset(BG_BITMAP_VRAM, 0, 256 * 192 * 2); // clear as 16-bit
 }
 
 void Renderer::clearBottomConsole() {
