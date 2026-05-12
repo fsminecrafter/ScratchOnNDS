@@ -516,9 +516,11 @@ void Renderer::renderFrame(ScratchProject& project) {
         bool scaled  = (sprite->size != 100.0);
         bool rotated = (sprite->rotationStyle == "all around" && sprite->direction != 90);
         int affineIdx = -1;
-
-        if ((scaled || rotated) && oamIdx < 32) {
-            affineIdx = oamIdx % 32;
+        static int affineCount = 0;  // reset each frame before the sprite loop
+        // (reset affineCount = 0 before the for loop over sorted sprites)
+        
+        if ((scaled || rotated) && affineCount < 32) {
+            affineIdx = affineCount++;
             double sc = sprite->size / 100.0;
             if (sc < 0.01) sc = 0.01;
             double angle = (sprite->rotationStyle == "all around") ?
