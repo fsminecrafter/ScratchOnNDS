@@ -48,6 +48,8 @@ public:
         return n;
     }
 
+    int getOamSlotsUsed() const { return lastOamCount; }
+
 private:
     Renderer() {}
 
@@ -85,6 +87,7 @@ private:
 
     bool      oamUsed[MAX_OAM_SPRITES];
     int       nextOam;
+    int       lastOamCount;
 
     int       bgHandle;
     bool      backdropLoaded;

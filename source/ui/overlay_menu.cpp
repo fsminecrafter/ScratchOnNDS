@@ -29,8 +29,13 @@
 #include <sys/stat.h>
 
 // ── libnds RTC / power headers (available in libnds 2.x) ─────────────────────
-#ifdef ARM9
-#include <nds/arm9/rtc.h>
+#if defined(ARM9)
+#  if defined(__has_include)
+#    if __has_include(<nds/arm9/rtc.h>)
+#      include <nds/arm9/rtc.h>
+#      define SCRATCHDS_HAVE_RTC 1
+#    endif
+#  endif
 #endif
 
 #define COL_WHITE   "\x1b[37;1m"
@@ -242,7 +247,7 @@ void OverlayMenu::gatherUsageStats() {
 #endif
 
     // ── RTC ──────────────────────────────────────────────────────────────────
-#ifdef ARM9
+#if defined(SCRATCHDS_HAVE_RTC)
     rtcTimeAndDate now;
     if (rtcGetTimeAndDate(&now) == 0) {
         // rtcTimeAndDate fields are BCD-encoded in libnds

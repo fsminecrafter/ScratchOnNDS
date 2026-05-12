@@ -128,6 +128,7 @@ static void linearToTiled8(const uint8_t* src, uint8_t* dst, int w, int h) {
 void Renderer::init() {
     memset(oamUsed, 0, sizeof(oamUsed));
     nextOam = 0;
+    lastOamCount = 0;
     backdropLoaded = false;
     memset(palSlotUsed, 0, sizeof(palSlotUsed));
     palSlotUsed[0] = true;
@@ -530,6 +531,8 @@ void Renderer::renderFrame(ScratchProject& project) {
                hFlip, false,               // hFlip, vFlip
                false);                     // mosaic
     }
+
+    lastOamCount = oamIdx;
 }
 
 // -----------------------------------------------------------------------

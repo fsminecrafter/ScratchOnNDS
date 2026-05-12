@@ -132,7 +132,7 @@ public:
         return inst;
     }
 
-    ScratchVM() : project(nullptr), globalTimer(0.0), answerStr("") {}
+    ScratchVM() : answerStr(""), globalTimer(0.0), project(nullptr) {}
     explicit ScratchVM(ScratchProject& proj) { init(proj); }
 
     void init(ScratchProject& proj);
