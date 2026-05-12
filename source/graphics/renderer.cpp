@@ -136,15 +136,26 @@ void Renderer::init() {
 
     oamInit(&oamMain, SpriteMapping_1D_32, false);
 
-    // BgType_Bmp16 matches renderBackdrop's RGB555 writes; layer 3 in mode 5
-    bgHandle = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
-    bgSetScroll(bgHandle, 0, 0);
-    bgUpdate();
+    // Mode 5 main engine: BG2 is the 256x192 16-bit direct-color bitmap layer.
+    // BG_BMP16_256x256 enables 16-bit color, BG_BMP_BASE(0) puts it at the
+    // start of VRAM_A (0x06000000), priority 3 = behind sprites.
+    REG_BG2CNT = BG_BMP16_256x256 | BG_BMP_BASE(0) | BG_PRIORITY(3);
+    bgHandle = 2;
 
+    // Scale/rotation identity matrix for BG2 (required for bitmap layers)
+    REG_BG2PA = 1 << 8;  // 1.0 in 8.8 fixed point
+    REG_BG2PB = 0;
+    REG_BG2PC = 0;
+    REG_BG2PD = 1 << 8;  // 1.0 in 8.8 fixed point
+    REG_BG2X = 0;
+    REG_BG2Y = 0;
+
+    // Clear top screen to black
+    dmaFillWords(0, BG_BMP16_VRAM, 256 * 192 * 2);
+
+    // Sub screen console for bottom display
     consoleInit(&bottomConsole, 0, BgType_Text4bpp, BgSize_T_256x256,
                 2, 0, false, true);
-
-    memset(BG_BITMAP_VRAM, 0, 256 * 192 * 2); // clear as 16-bit
 }
 
 void Renderer::clearBottomConsole() {
@@ -538,17 +549,20 @@ void Renderer::renderFrame(ScratchProject& project) {
 // -----------------------------------------------------------------------
 // renderBackdrop
 // -----------------------------------------------------------------------
+
 void Renderer::renderBackdrop(ScratchProject& project) {
+    // Ensure BG2 is visible (must be set each frame in case other code touched it)
+    REG_DISPCNT |= DISPLAY_BG2_ACTIVE;
+
     ScratchSprite* stage = project.getStage();
     if (!stage || stage->costumes.empty()) {
-        memset(BG_BITMAP_VRAM, 0, 256 * 192);
+        dmaFillWords(0, BG_BMP16_VRAM, 256 * 192 * 2);
         return;
     }
     ScratchCostume& bg = stage->costumes[stage->currentCostume];
     if (!bg.gfxPtr || !bg.isBackdrop) {
-        uint16_t* vram = BG_BMP16_VRAM;
-        uint16_t  white = RGB15(31, 31, 31);
-        for (int i = 0; i < 256*192; i++) vram[i] = white;
+        uint16_t white = RGB15(31, 31, 31);
+        for (int i = 0; i < 256 * 192; i++) BG_BMP16_VRAM[i] = white;
         return;
     }
 
