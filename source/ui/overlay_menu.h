@@ -138,6 +138,7 @@ public:
     bool update(float dt);
     void open();
     void close();
+    void consoleClearSafe();
     bool isOpen() const { return open_; }
 
     using ApplyCallback = std::function<void(const ScratchDSSettings&)>;
@@ -202,6 +203,7 @@ private:
     // Usage stats helpers
     void gatherUsageStats();
     static int measureFreeRamBinary();
+    int        cachedFreeRam_;     // probed once in open(), used by INFO page
 
     // Drawing helpers
     void consoleClear();
