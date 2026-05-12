@@ -451,6 +451,7 @@ void mainLoop(ScratchProject& project) {
 
         input.update();
         ext.update(dt);
+        menu.setLiveData(&project, &vm, s_currentFPS, Renderer::getInstance().getPalSlotsUsed(), oamIdx);  // oamIdx is the sprite count from the previous frame
 
         bool paused = menu.update(dt);
 
