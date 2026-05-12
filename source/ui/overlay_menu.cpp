@@ -571,74 +571,88 @@ void OverlayMenu::renderUsage() {
 
     renderHeader("Usage");
 
-    // We render into a flat array of lines then display a window of them.
-    // Max lines: ~6 (RAM) + 2*16 (sprites) + 1*64 (threads) + 6 (system) = ~110
+    // Render into a flat string array, then display a scrollable window.
+    // static = lives in BSS, zero stack cost on the NDS ARM9.
     static const int MAX_LINES = 120;
-    static char lines[MAX_LINES][33];  // 32 chars + null, static = no stack pressure
+    static char lines[MAX_LINES][33];   // 32 visible chars + NUL
     int nLines = 0;
 
-    auto addLine = [&](const char* fmt, ...) __attribute__((format(printf,2,3)));
-    // Can't use lambda with varargs portably, so use a local function via macro:
-#define ADD(fmt, ...) do { \
-    if (nLines < MAX_LINES) { \
-        snprintf(lines[nLines], 33, fmt, ##__VA_ARGS__); \
-        nLines++; \
-    } \
-} while(0)
+    // addL: safe line builder — never touches lines[] out of bounds.
+    // Blank separator lines use a single space so snprintf has a real format string.
+    auto addL = [&](const char* str) {
+        if (nLines < MAX_LINES) {
+            strncpy(lines[nLines], str, 32);
+            lines[nLines][32] = '\0';
+            nLines++;
+        }
+    };
+    // addF: formatted line.
+    auto addF = [&](char* buf, const char* fmt, ...) {
+        va_list ap;
+        va_start(ap, fmt);
+        vsnprintf(buf, 33, fmt, ap);
+        va_end(ap);
+        addL(buf);
+    };
+    // Scratch buffer reused by addF.
+    char _fb[33];
+#define ADDF(fmt, ...) addF(_fb, fmt, ##__VA_ARGS__)
+#define ADDL(str)      addL(str)
+#define ADDS()         addL(" ")   // blank separator — no format string
 
     // ── RAM ──────────────────────────────────────────────────────────────────
-    ADD("--- RAM ---");
+    ADDL("--- RAM ---");
     int usedKB  = s.usedRamBytes() / 1024;
     int freeKB  = s.freeRamBytes   / 1024;
     int totalKB = s.totalRamBytes  / 1024;
-    ADD("Total%4dK Used%4dK Free%3dK", totalKB, usedKB, freeKB);
-    ADD("Gfx:%3dK Snd:%3dK Sys:%3dK",
-        s.usedBySpritesBytes / 1024,
-        s.usedBySoundsBytes  / 1024,
-        (s.usedRamBytes() - s.usedBySpritesBytes - s.usedBySoundsBytes) / 1024);
-    ADD("");
+    ADDF("Total%4dK Used%4dK Free%3dK", totalKB, usedKB, freeKB);
+    ADDF("Gfx:%3dK Snd:%3dK Sys:%3dK",
+         s.usedBySpritesBytes / 1024,
+         s.usedBySoundsBytes  / 1024,
+         (s.usedRamBytes() - s.usedBySpritesBytes - s.usedBySoundsBytes) / 1024);
+    ADDS();
 
     // ── Sprites ───────────────────────────────────────────────────────────────
-    ADD("--- Sprites (%d) ---", s.numSprites);
+    ADDF("--- Sprites (%d) ---", s.numSprites);
     for (int i = 0; i < s.numSprites; i++) {
         const UsageStats::SpriteEntry& e = s.sprites[i];
-        ADD("%-14s %s %3dK",
-            e.name,
-            e.visible ? " on" : "off",
-            (e.costumesBytes + e.soundsBytes) / 1024);
-        ADD("  blk:%-3d cos:%-2d snd:%-2d",
-            e.numBlocks, e.numCostumes, e.numSounds);
+        ADDF("%-14s %s %3dK",
+             e.name, e.visible ? " on" : "off",
+             (e.costumesBytes + e.soundsBytes) / 1024);
+        ADDF("  blk:%-3d cos:%-2d snd:%-2d",
+             e.numBlocks, e.numCostumes, e.numSounds);
     }
-    if (s.numSprites == 0) ADD("  (none)");
-    ADD("");
+    if (s.numSprites == 0) ADDL("  (none)");
+    ADDS();
 
     // ── Threads ───────────────────────────────────────────────────────────────
-    ADD("--- Threads (%d) ---", s.numThreads);
+    ADDF("--- Threads (%d) ---", s.numThreads);
     for (int i = 0; i < s.numThreads; i++) {
         const UsageStats::ThreadEntry& te = s.threads[i];
-        ADD("%-12s %-6s stk:%d",
-            te.spriteName, te.state, te.stackDepth);
+        ADDF("%-12s %-6s stk:%d",
+             te.spriteName, te.state, te.stackDepth);
     }
-    if (s.numThreads == 0) ADD("  (none)");
-    ADD("");
+    if (s.numThreads == 0) ADDL("  (none)");
+    ADDS();
 
     // ── OAM / Palette ─────────────────────────────────────────────────────────
-    ADD("--- OAM / PAL ---");
-    ADD("OAM %3d/128  PAL %2d/15",
-        s.oamSlotsUsed, s.palSlotsUsed);
-    ADD("FPS %2d.%d", s.fpsTenths / 10, s.fpsTenths % 10);
-    ADD("");
+    ADDL("--- OAM / PAL ---");
+    ADDF("OAM %3d/128  PAL %2d/15", s.oamSlotsUsed, s.palSlotsUsed);
+    ADDF("FPS %2d.%d", s.fpsTenths / 10, s.fpsTenths % 10);
+    ADDS();
 
     // ── System ────────────────────────────────────────────────────────────────
-    ADD("--- System ---");
-    ADD("%s  %s", s.timeStr, s.dateStr);
-    ADD("%.32s", s.ndsModel);
+    ADDL("--- System ---");
+    ADDF("%s  %s", s.timeStr, s.dateStr);
+    ADDL(s.ndsModel);
     if (s.batteryPercent < 0)
-        ADD("Battery: N/A");
+        ADDL("Battery: N/A");
     else
-        ADD("Battery: %3d%%%s", s.batteryPercent, s.isCharging ? " +" : "");
+        ADDF("Battery: %3d%%%s", s.batteryPercent, s.isCharging ? " +" : "");
 
-#undef ADD
+#undef ADDF
+#undef ADDL
+#undef ADDS
 
     // ── Render visible window ─────────────────────────────────────────────────
     const int VISIBLE = 19;  // rows 2-20
