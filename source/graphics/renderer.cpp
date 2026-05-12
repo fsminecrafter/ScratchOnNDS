@@ -134,12 +134,12 @@ void Renderer::init() {
     palSlotUsed[0] = true;
     memset(SPRITE_PALETTE, 0, 256 * sizeof(uint16_t));
 
-    oamInit(&oamMain, SpriteMapping_1D_32, false);
+    oamInit(&oamMain, SpriteMapping_1D_128, false);
 
     // Mode 5 main engine: BG2 is the 256x192 16-bit direct-color bitmap layer.
     // BG_BMP16_256x256 enables 16-bit color, BG_BMP_BASE(0) puts it at the
     // start of VRAM_A (0x06000000), priority 3 = behind sprites.
-    REG_BG2CNT = BG_BMP16_256x256 | BG_BMP_BASE(0) | BG_PRIORITY(3);
+    REG_DISPCNT = MODE_5_2D | DISPLAY_BG2_ACTIVE | DISPLAY_SPR_ACTIVE | DISPLAY_SPR_1D_LAYOUT;
     bgHandle = 2;
 
     // Scale/rotation identity matrix for BG2 (required for bitmap layers)
@@ -150,11 +150,10 @@ void Renderer::init() {
     REG_BG2X = 0;
     REG_BG2Y = 0;
 
-    // Clear top screen to black
     dmaFillWords(0, BG_BMP16_VRAM, 256 * 192 * 2);
     
-    // Enable BG2 (backdrop) + sprites in 1D mapping mode
-    REG_DISPCNT |= DISPLAY_BG2_ACTIVE | DISPLAY_SPR_ACTIVE | DISPLAY_SPR_1D;
+    // Set display control once: MODE_5 + BG2 + sprites (1D 128-byte for 8bpp)
+    REG_DISPCNT = MODE_5_2D | DISPLAY_BG2_ACTIVE | DISPLAY_SPR_ACTIVE | DISPLAY_SPR_1D_LAYOUT;
 
     // Sub screen console for bottom display
     consoleInit(&bottomConsole, 0, BgType_Text4bpp, BgSize_T_256x256,
@@ -554,8 +553,6 @@ void Renderer::renderFrame(ScratchProject& project) {
 // -----------------------------------------------------------------------
 
 void Renderer::renderBackdrop(ScratchProject& project) {
-    // Ensure BG2 is visible (must be set each frame in case other code touched it)
-    REG_DISPCNT |= DISPLAY_BG2_ACTIVE | DISPLAY_SPR_ACTIVE | DISPLAY_SPR_1D;
 
     ScratchSprite* stage = project.getStage();
     if (!stage || stage->costumes.empty()) {
