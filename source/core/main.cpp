@@ -386,6 +386,7 @@ void onSettingsApplied(const ScratchDSSettings& settings) {
         ScratchVM::getInstance().init(*g_currentProject);
         ScratchVM::getInstance().greenFlag();
     }
+    Renderer::getInstance().init();
 }
 
 void onProjectLoad(const char* path) {
