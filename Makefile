@@ -11,6 +11,8 @@ ifeq ($(strip $(DEVKITPRO)),)
 $(error "Set DEVKITPRO in your environment. export DEVKITPRO=/opt/devkitpro")
 endif
 
+DEVKITARM ?= $(DEVKITPRO)/devkitARM
+
 LD := arm-none-eabi-g++
 include $(DEVKITARM)/ds_rules
 

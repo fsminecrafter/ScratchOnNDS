@@ -37,6 +37,8 @@ command -v sudo >/dev/null 2>&1 || die "sudo is required but not installed."
 command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || \
     die "curl or wget is required but neither is installed."
 
+export DEBIAN_FRONTEND=noninteractive
+
 # Prefer curl, fall back to wget
 if command -v curl >/dev/null 2>&1; then
     download() { curl -fsSL -o "$2" "$1"; }
@@ -82,10 +84,10 @@ PACKAGES=(
 )
 
 info "Updating apt package lists..."
-sudo apt-get update -qq
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
 
 info "Installing: ${PACKAGES[*]}"
-sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}"
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${PACKAGES[@]}"
 ok "System packages installed."
 
 # ─── Step 2: devkitPro pacman ─────────────────────────────────────────────────
@@ -105,7 +107,7 @@ else
     info "Running local devkitPro installer..."
 
     # Prevent installer oddities from aborting setup
-    if ! sudo bash "${LOCAL_INSTALLER}"; then
+    if ! sudo DEBIAN_FRONTEND=noninteractive bash "${LOCAL_INSTALLER}" < /dev/null; then
         warn "Installer returned non-zero status."
         warn "Checking whether dkp-pacman was installed anyway..."
     fi
@@ -139,6 +141,13 @@ export DEVKITARM="${DEVKITARM_ROOT}"
 export DEVKITPPC="${DEVKITPRO_ROOT}/devkitPPC"
 export PATH="${DEVKITPRO_ROOT}/tools/bin:${DEVKITARM_ROOT}/bin:${PATH}"
 
+# Some devkitPro packages also install environment helpers in /etc/profile.d.
+# Source them now so verification checks can see ndstool and other tools.
+if [[ -f /etc/profile.d/devkit-env.sh ]]; then
+    # shellcheck source=/etc/profile.d/devkit-env.sh
+    source /etc/profile.d/devkit-env.sh
+fi
+
 # ─── Step 4: NDS toolchain and libraries ─────────────────────────────────────
 header "Step 4/5 — NDS development packages (nds-dev)"
 
@@ -147,7 +156,7 @@ sudo dkp-pacman -Sy --noconfirm
 
 info "Installing nds-dev (devkitARM + libnds + libfat + maxmod + ds tools)..."
 # nds-dev is a package group that pulls in everything needed to build .nds ROMs
-sudo dkp-pacman -S --noconfirm --needed \
+printf "\n" | sudo dkp-pacman -S --noconfirm --needed \
     nds-dev \
     devkitARM
 
