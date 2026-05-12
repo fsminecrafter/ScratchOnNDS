@@ -14,6 +14,7 @@
 #include <fat.h>
 #include "core/project.h"
 #include "core/vm.h"
+#include "core/render_test.h"
 #include "graphics/renderer.h"
 #include "audio/audio_manager.h"
 #include "input/input_handler.h"
@@ -474,7 +475,7 @@ void mainLoop(ScratchProject& project) {
             rend.renderUI(project, input);
             drawFPSOverlay();
         }
-
+        render_test_step();
         oamUpdate(&oamMain);
         oamUpdate(&oamSub);
         audio.update();
