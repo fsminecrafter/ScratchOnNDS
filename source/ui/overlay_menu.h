@@ -1,41 +1,5 @@
 // =============================================================================
-// overlay_menu.h / overlay_menu.cpp
-// ScratchDS System Overlay Menu
-//
-// Activated by holding L + R + B simultaneously for ~0.5 seconds.
-// Pauses the Scratch VM and renders a full-screen menu on the TOP screen
-// (leaving the bottom touchscreen free for menu navigation via touch OR d-pad).
-//
-// Input design: InputHandler::update() is the ONLY place scanKeys() is
-// called each frame.  OverlayMenu reads the cached key masks from
-// InputHandler::getKeysDown() / getKeysHeld() — never calls scanKeys()
-// itself (except DPadTextInput which is a standalone modal widget).
-//
-// Menu structure:
-//   ┌─────────────────────────────┐
-//   │  ScratchDS  [version]       │
-//   ├─────────────────────────────┤
-//   │  > Info                     │
-//   │    Settings                 │
-//   │    Load                     │
-//   │    Resume                   │
-//   └─────────────────────────────┘
-//
-//  Info page:
-//    Build date, version, devkitARM version, libnds version,
-//    NDS model (Phat/Lite/DSi), RAM free, loaded project name.
-//
-//  Settings page:
-//    - Target FPS         [30 | 60]
-//    - Primary Screen     [Top | Bottom]  (stage vs UI screen swap)
-//    - Stage Scale        [Full | Aspect | Native]
-//    - Compile Project    [Start Compilation...]
-//    - Reset Scene        [Confirm]
-//
-//  Load page:
-//    File browser for fat:/scratch/*.sb3
-//    Manual path input (via on-screen keyboard or D-pad char select)
-//
+// overlay_menu.h — patched: added USAGE page with detailed memory/thread/battery
 // =============================================================================
 #pragma once
 
@@ -44,8 +8,12 @@
 #include <vector>
 #include <functional>
 
+// Forward declarations needed for gatherUsageStats
+class ScratchVM;
+struct ScratchProject;
+
 // -----------------------------------------------------------------------
-// Build metadata (set by Makefile via -D flags, with fallbacks)
+// Build metadata
 // -----------------------------------------------------------------------
 #ifndef SCRATCHDS_VERSION
 #define SCRATCHDS_VERSION "1.0.0"
@@ -58,25 +26,20 @@
 #endif
 
 // -----------------------------------------------------------------------
-// Settings that the menu can modify
+// ScratchDSSettings
 // -----------------------------------------------------------------------
 struct ScratchDSSettings {
-    int  targetFPS;          // 30 or 60
-    bool stageOnTop;         // true = stage top / UI bottom; false = swapped
-    int  stageScale;         // 0=Full(stretch), 1=Aspect, 2=Native(1:1)
+    int  targetFPS;
+    bool stageOnTop;
+    int  stageScale;
     bool showFPSCounter;
-    bool autoSaveSettings;   // persist to fat:/scratch/.settings
+    bool autoSaveSettings;
     char lastProjectPath[256];
 
     ScratchDSSettings() :
-        targetFPS(60),
-        stageOnTop(true),
-        stageScale(1),
-        showFPSCounter(false),
-        autoSaveSettings(true)
-    {
-        lastProjectPath[0] = '\0';
-    }
+        targetFPS(60), stageOnTop(true), stageScale(1),
+        showFPSCounter(false), autoSaveSettings(true)
+    { lastProjectPath[0] = '\0'; }
 
     bool save(const char* path = "fat:/scratch/.settings");
     bool load(const char* path = "fat:/scratch/.settings");
@@ -91,7 +54,62 @@ struct FileEntry {
 };
 
 // -----------------------------------------------------------------------
-// Overlay menu page enum
+// UsageStats — gathered once when the USAGE page opens (not every frame)
+// to avoid hammering malloc/free in the render loop.
+// -----------------------------------------------------------------------
+struct UsageStats {
+    // ── Memory ──────────────────────────────────────────────────────────
+    int totalRamBytes;        // NDS ARM9 main RAM = 4 MB
+    int freeRamBytes;
+    int usedBySpritesBytes;   // sum of gfx VRAM pointers × pixel counts
+    int usedBySoundsBytes;    // sum of loaded PCM buffers
+    int vramEstimateBytes;    // VRAM A+B+C+D combined 512 KB
+
+    // Per-sprite memory breakdown (up to 16 entries)
+    struct SpriteEntry {
+        char name[24];
+        int  costumesBytes;
+        int  soundsBytes;
+        int  numBlocks;
+        int  numCostumes;
+        int  numSounds;
+        bool visible;
+        bool isStage;
+    };
+    static constexpr int MAX_SPRITES = 16;
+    SpriteEntry sprites[MAX_SPRITES];
+    int         numSprites;
+
+    // ── Threads ──────────────────────────────────────────────────────────
+    struct ThreadEntry {
+        char spriteName[20];
+        char state[16];    // "RUNNING","WAIT_SEC","WAIT_SND","DONE"
+        char blockId[12];  // truncated current block id
+        int  stackDepth;
+        int  stepsThisFrame;
+    };
+    static constexpr int MAX_THREADS = 64;
+    ThreadEntry threads[MAX_THREADS];
+    int         numThreads;
+
+    // ── System ───────────────────────────────────────────────────────────
+    int  batteryPercent;   // 0-100, or -1 if not available
+    bool isCharging;
+    char timeStr[12];      // "HH:MM:SS\0"
+    char dateStr[12];      // "YYYY-MM-DD\0"
+    int  fpsTenths;        // current FPS × 10 (avoids float in render)
+    char ndsModel[24];
+
+    // ── OAM / palette ────────────────────────────────────────────────────
+    int palSlotsUsed;
+    int oamSlotsUsed;
+
+    // ── Derived ──────────────────────────────────────────────────────────
+    int usedRamBytes() const { return totalRamBytes - freeRamBytes; }
+};
+
+// -----------------------------------------------------------------------
+// Menu page enum
 // -----------------------------------------------------------------------
 enum class MenuPage {
     MAIN,
@@ -101,10 +119,11 @@ enum class MenuPage {
     COMPILE,
     CONFIRM_RESET,
     CONFIRM_LOAD,
+    USAGE,          // ← new
 };
 
 // -----------------------------------------------------------------------
-// OverlayMenu — manages the pause overlay
+// OverlayMenu
 // -----------------------------------------------------------------------
 class OverlayMenu {
 public:
@@ -116,12 +135,7 @@ public:
     void setConsole(PrintConsole* con) { externalConsole_ = con; }
 
     void init(ScratchDSSettings& settings);
-
-    // Call every frame AFTER InputHandler::update() has been called.
-    // Reads cached key state from InputHandler — does NOT call scanKeys().
-    // Returns true if the Scratch VM should be paused this frame.
     bool update(float dt);
-
     void open();
     void close();
     bool isOpen() const { return open_; }
@@ -131,11 +145,25 @@ public:
     void setApplyCallback(ApplyCallback cb) { onApply_ = cb; }
     void setLoadCallback(LoadCallback  cb)  { onLoad_  = cb; }
 
+    // Called from main loop so USAGE page can access live VM/project data.
+    // Safe to call every frame; data is only re-gathered when USAGE page opens.
+    void setLiveData(ScratchProject* project, ScratchVM* vm,
+                     float currentFps, int palSlotsUsed, int oamSlotsUsed) {
+        liveProject_     = project;
+        liveVm_          = vm;
+        liveFps_         = currentFps;
+        livePalSlots_    = palSlotsUsed;
+        liveOamSlots_    = oamSlotsUsed;
+    }
+
     const ScratchDSSettings& getSettings() const { return *settings_; }
 
 private:
     OverlayMenu() : open_(false), settings_(nullptr),
-                    cachedKeysDown_(0), cachedKeysHeld_(0) {}
+                    cachedKeysDown_(0), cachedKeysHeld_(0),
+                    liveProject_(nullptr), liveVm_(nullptr),
+                    liveFps_(0), livePalSlots_(0), liveOamSlots_(0),
+                    usageScrollOff_(0), usageStatsDirty_(true) {}
 
     // Rendering
     void render();
@@ -145,18 +173,18 @@ private:
     void renderLoad();
     void renderCompile();
     void renderConfirmReset();
-    void renderConfirmLoad();
+    void renderUsage();
     void renderHeader(const char* title);
     void renderFooter();
 
-    // Input handling — all read cachedKeysDown_ / cachedKeysHeld_.
-    // None of these call scanKeys().
+    // Input
     void handleInput();
     void handleMainInput();
     void handleInfoInput();
     void handleSettingsInput();
     void handleLoadInput();
     void handleConfirmInput(bool& confirmed);
+    void handleUsageInput();
 
     // File browser
     void scanDirectory(const char* path);
@@ -171,10 +199,19 @@ private:
     void startCompile();
     void tickCompile(float dt);
 
+    // Usage stats helpers
+    void gatherUsageStats();
+    static int measureFreeRamBinary();
+
     // Drawing helpers
     void consoleClear();
 
-    // ---- State ----
+    // NDS info helpers
+    void getNDSModel(char* out, int maxLen);
+    int  getFreeRAM();
+    void getProjectName(char* out, int maxLen);
+
+    // ── State ────────────────────────────────────────────────────────────
     bool            open_;
     MenuPage        page_;
     int             cursor_;
@@ -183,19 +220,15 @@ private:
     ScratchDSSettings* settings_;
     ScratchDSSettings  pending_;
 
-    // Cached key state — populated once per frame by update() from
-    // InputHandler::getKeysDown() / getKeysHeld().
-    // All handleXxxInput() methods read these; nothing else calls
-    // scanKeys() so edge state is never lost.
     u32 cachedKeysDown_;
     u32 cachedKeysHeld_;
 
-    // Load browser state
+    // Load browser
     std::vector<FileEntry> dirEntries_;
     char currentDir_[256];
     char selectedPath_[256];
 
-    // Compile state
+    // Compile
     bool   compiling_;
     float  compileTimer_;
     int    compileProgress_;
@@ -209,30 +242,34 @@ private:
     float  comboHoldTimer_;
     static constexpr float COMBO_HOLD_REQUIRED = 0.4f;
 
-    // NDS console handle for menu (top screen)
+    // Console
     PrintConsole* externalConsole_;
 
     // Callbacks
     ApplyCallback onApply_;
     LoadCallback  onLoad_;
 
-    // NDS info helpers
-    void   getNDSModel(char* out, int maxLen);
-    int    getFreeRAM();
-    void   getProjectName(char* out, int maxLen);
+    // Live data pointers (set by main loop via setLiveData)
+    ScratchProject* liveProject_;
+    ScratchVM*      liveVm_;
+    float           liveFps_;
+    int             livePalSlots_;
+    int             liveOamSlots_;
+
+    // Usage page
+    int        usageScrollOff_;
+    bool       usageStatsDirty_;  // true when we need to re-gather stats
+    UsageStats usageStats_;
 };
 
 // -----------------------------------------------------------------------
-// Simple on-screen D-pad character picker (for manual path entry).
-// This is a standalone modal widget that owns its own input polling —
-// it calls scanKeys() internally because it runs outside the normal
-// per-frame InputHandler flow.
+// DPadTextInput
 // -----------------------------------------------------------------------
 class DPadTextInput {
 public:
     DPadTextInput();
     void reset(const char* prompt, const char* initial = "");
-    bool update();   // calls scanKeys() internally — standalone modal only
+    bool update();
     const char* getText() const { return buf_; }
     void render(int y);
 
