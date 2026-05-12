@@ -152,6 +152,9 @@ void Renderer::init() {
 
     // Clear top screen to black
     dmaFillWords(0, BG_BMP16_VRAM, 256 * 192 * 2);
+    
+    // Enable BG2 (backdrop) + sprites in 1D mapping mode
+    REG_DISPCNT |= DISPLAY_BG2_ACTIVE | DISPLAY_SPR_ACTIVE | DISPLAY_SPR_1D;
 
     // Sub screen console for bottom display
     consoleInit(&bottomConsole, 0, BgType_Text4bpp, BgSize_T_256x256,
@@ -552,7 +555,7 @@ void Renderer::renderFrame(ScratchProject& project) {
 
 void Renderer::renderBackdrop(ScratchProject& project) {
     // Ensure BG2 is visible (must be set each frame in case other code touched it)
-    REG_DISPCNT |= DISPLAY_BG2_ACTIVE;
+    REG_DISPCNT |= DISPLAY_BG2_ACTIVE | DISPLAY_SPR_ACTIVE | DISPLAY_SPR_1D;
 
     ScratchSprite* stage = project.getStage();
     if (!stage || stage->costumes.empty()) {
