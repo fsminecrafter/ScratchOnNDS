@@ -42,6 +42,12 @@ public:
 
     PrintConsole* getBottomConsole() { return &bottomConsole; }
 
+    int getPalSlotsUsed() const {
+        int n = 0;
+        for (int i = 0; i < PAL_MAX_SLOTS; i++) if (palSlotUsed[i]) n++;
+        return n;
+    }
+
 private:
     Renderer() {}
 
