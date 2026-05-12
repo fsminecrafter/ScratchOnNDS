@@ -88,6 +88,8 @@ int main() {
     videoSetModeSub(MODE_0_2D);
     vramSetBankC(VRAM_C_SUB_BG);
 
+    rend.init();
+
     // ── Step 3: Bring up the sub-screen text console IMMEDIATELY ───────
     // This is the ONLY place we call consoleInit for the bottom screen.
     // All showLoadingScreen / printf output goes here.
@@ -424,9 +426,6 @@ void mainLoop(ScratchProject& project) {
     InputHandler& input = InputHandler::getInstance();
     NDSExtension& ext   = NDSExtension::getInstance();
     OverlayMenu&  menu  = OverlayMenu::getInstance();
-
-    // Init the top-screen renderer (does NOT touch the sub console)
-    rend.init();
 
     clock_t prevTime = clock();
     float   dt       = 1.0f / 60.0f;
