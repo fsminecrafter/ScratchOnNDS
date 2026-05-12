@@ -124,10 +124,14 @@ header "Step 3/5 — Environment variables"
 
 add_env_to_file() {
     local file="$1"
-    if grep -q "devkitPro environment" "$file" 2>/dev/null; then
+
+    # Ensure the file exists
+    sudo touch "$file"
+
+    if sudo grep -q "devkitPro environment" "$file" 2>/dev/null; then
         info "devkitPro env block already present in ${file}. Skipping."
     else
-        echo -e "${ENV_BLOCK}" >> "$file"
+        echo -e "${ENV_BLOCK}" | sudo tee -a "$file" >/dev/null
         ok "Added devkitPro env block to ${file}."
     fi
 }
