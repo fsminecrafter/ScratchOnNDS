@@ -57,27 +57,27 @@ void render_test_step() {
 
     // ── Test 3: dump key register values to bottom screen every 2 seconds
     if (s_testFrame % 120 == 1) {
-        iprintf("\x1b[0;0H");
-        iprintf("=== RENDER DIAG (frame %d)\n",  s_testFrame);
-        iprintf("DISPCNT : %08lX\n", (unsigned long)REG_DISPCNT);
-        iprintf("BG2CNT  : %04X\n",  (unsigned)REG_BG2CNT);
-        iprintf("BG2PA   : %04X\n",  (unsigned)REG_BG2PA);
-        iprintf("BG2PD   : %04X\n",  (unsigned)REG_BG2PD);
+        printf("\x1b[0;0H");
+        printf("=== RENDER DIAG (frame %d)\n",  s_testFrame);
+        printf("DISPCNT : %08lX\n", (unsigned long)REG_DISPCNT);
+        printf("BG2CNT  : %04X\n",  (unsigned)REG_BG2CNT);
+        printf("BG2PA   : %04X\n",  (unsigned)REG_BG2PA);
+        printf("BG2PD   : %04X\n",  (unsigned)REG_BG2PD);
         // VRAM bank control registers
-        iprintf("VRAMCNT_A: %02X\n", (unsigned)(*(volatile uint8_t*)0x04000240));
-        iprintf("VRAMCNT_B: %02X\n", (unsigned)(*(volatile uint8_t*)0x04000241));
-        iprintf("VRAMCNT_C: %02X\n", (unsigned)(*(volatile uint8_t*)0x04000242));
+        printf("VRAMCNT_A: %02X\n", (unsigned)(*(volatile uint8_t*)0x04000240));
+        printf("VRAMCNT_B: %02X\n", (unsigned)(*(volatile uint8_t*)0x04000241));
+        printf("VRAMCNT_C: %02X\n", (unsigned)(*(volatile uint8_t*)0x04000242));
         // What is actually in BG VRAM at offset 0?
-        iprintf("BG_VRAM[0]: %04X\n",(unsigned)MAIN_BG_VRAM[0]);
-        iprintf("BG_VRAM[1]: %04X\n",(unsigned)MAIN_BG_VRAM[1]);
+        printf("BG_VRAM[0]: %04X\n",(unsigned)MAIN_BG_VRAM[0]);
+        printf("BG_VRAM[1]: %04X\n",(unsigned)MAIN_BG_VRAM[1]);
         // Sprite palette
-        iprintf("SPR_PAL[1]: %04X\n",(unsigned)SPRITE_PALETTE[1]);
+        printf("SPR_PAL[1]: %04X\n",(unsigned)SPRITE_PALETTE[1]);
         // OAM slot 0 raw
         volatile uint16_t* oam = (volatile uint16_t*)0x07000000;
-        iprintf("OAM[0]: %04X %04X %04X\n",
+        printf("OAM[0]: %04X %04X %04X\n",
                 (unsigned)oam[0],(unsigned)oam[1],(unsigned)oam[2]);
         // Sprite VRAM tile 0 first byte
-        iprintf("SPR_VRAM[0]: %02X\n",
+        printf("SPR_VRAM[0]: %02X\n",
                 (unsigned)(*(volatile uint8_t*)0x06200000));
     }
 }
