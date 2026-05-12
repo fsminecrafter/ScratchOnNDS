@@ -304,8 +304,12 @@ void OverlayMenu::close() {
     consoleClear();
 }
 
-void OverlayMenu::consoleClearSafe() {
+void OverlayMenu::consoleClear() {
     consoleSel();
+    ::consoleClear();
+}
+
+void OverlayMenu::consoleClearSafe() {
     consoleClear();
 }
 
