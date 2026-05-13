@@ -309,7 +309,7 @@ void ScratchVM::executeThread(ScriptThread& thread, double /*dt*/) {
             // End of chain — unwind call stack
             while (!thread.callStack.empty()) {
                 StackFrame& frame = thread.callStack.back();
-                if (frame.isGlide || frame.isWaitUntil || frame.isBroadcastWait) {
+                if (frame.isGlide() || frame.isWaitUntil() || frame.isBroadcastWait()) {
                     return; // handled in step()
                 }
                 if (frame.remaining > 0) frame.remaining--;
