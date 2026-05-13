@@ -1260,30 +1260,38 @@ void ScratchVM::deleteClone(ScratchSprite* sprite) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Sprite property (for sensing_of)
 // ═══════════════════════════════════════════════════════════════════════════════
+ScratchValue ScratchVM::getSpriteProperty(ScratchSprite* s, const char* prop)
+{
+    if (strcmp(prop, "x position") == 0)
+        return ScratchValue(s->x);
 
-ScratchValue ScratchVM::getSpriteProperty(
-                        ScratchSprite* s,
-                        const char* prop) {
-    if (strcmp(prop, "x position") == 0)     return ScratchValue(s->x);
-    if (strcmp(prop, "y position") == 0)    return ScratchValue(s->y);
-    if (strcmp(prop, "direction") == 0)     return ScratchValue((double)s->direction);
-    if (strcmp(prop, "costume #") == 0) || prop == "costume number")
-        return ScratchValue((double)(s->currentCostume + 1));
-    if (strcmp(prop, "costume name") == 0) {
-        if (!s->costumes.empty() && s->currentCostume < (int)s->costumes.size())
-            return ScratchValue(s->costumes[s->currentCostume].name);
-        return ScratchValue("");
-    }
-    if (strcmp(prop, "size") == 0)          return ScratchValue(s->size);
-    if (strcmp(prop, "volume") == 0)        return ScratchValue(100.0);  // no per-sprite volume
-    if (strcmp(prop, "backdrop #") == 0) || prop == "backdrop number")
-        return ScratchValue((double)(s->currentCostume + 1));
-    if (strcmp(prop, "backdrop name") {
-        if (!s->costumes.empty() && s->currentCostume < (int)s->costumes.size())
-            return ScratchValue(s->costumes[s->currentCostume].name);
-        return ScratchValue("");
-    }
-    // Variable lookup
+    if (strcmp(prop, "y position") == 0)
+        return ScratchValue(s->y);
+
+    if (strcmp(prop, "direction") == 0)
+        return ScratchValue((double)s->direction);
+
+    if (strcmp(prop, "costume #") == 0 ||
+        strcmp(prop, "costume number") == 0)
+        return ScratchValue((double)s->costumeIndex);
+
+    if (strcmp(prop, "costume name") == 0)
+        return ScratchValue(s->costumeName);
+
+    if (strcmp(prop, "size") == 0)
+        return ScratchValue(s->size);
+
+    if (strcmp(prop, "volume") == 0)
+        return ScratchValue(100.0);
+
+    if (strcmp(prop, "backdrop #") == 0 ||
+        strcmp(prop, "backdrop number") == 0)
+        return ScratchValue((double)s->backdropIndex);
+
+    if (strcmp(prop, "backdrop name") == 0)
+        return ScratchValue(s->backdropName);
+
+    // Variable fallback
     return getVariable(s, prop);
 }
 
