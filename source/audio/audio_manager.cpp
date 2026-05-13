@@ -171,19 +171,10 @@ void AudioManager::playSound(ScratchSprite* sprite, const std::string& soundName
 // -----------------------------------------------------------------------
 void AudioManager::playRamSound(ScratchSound& sound)
 {
-    // Maxmod sample descriptor must persist after function scope
-    static mm_ds_sample sampleDesc;
+    // Play using maxmod SFX ID (correct NDS usage)
+    mm_sfxhand handle = mmEffect(sound.mmSoundId);
 
-    sampleDesc.loop_start  = 0;
-    sampleDesc.length      = (mm_word)(sound.pcmSize / 2);
-    sampleDesc.format      = (mm_byte)sound.mmSoundId;
-    sampleDesc.repeat_mode = 1;
-    sampleDesc.base_rate   = (mm_hword)((sound.rate * 512) / 15768);
-    sampleDesc.data        = sound.pcmData;
-
-    // Play sound
-    mm_sfxhand handle = mmEffectPlay(&sampleDesc);
-
+    // Store handle if valid
     if (handle >= 0 && activeHandleCount < MAX_ACTIVE_SOUNDS)
     {
         activeHandles[activeHandleCount++] = handle;
