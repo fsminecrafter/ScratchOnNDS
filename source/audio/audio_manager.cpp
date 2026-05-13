@@ -176,15 +176,15 @@ void AudioManager::playSound(ScratchSprite* sprite, const std::string& soundName
 // -----------------------------------------------------------------------
 void AudioManager::playRamSound(ScratchSound& sound)
 {
-    // Play using maxmod SFX ID (correct NDS usage)
+    // Play effect using maxmod SFX ID
     mm_sfxhand handle = mmEffect(sound.mmSoundId);
 
-    // Store handle if valid
     if (handle >= 0 && activeHandleCount < MAX_ACTIVE_SOUNDS)
     {
         activeHandles[activeHandleCount++] = handle;
     }
 }
+
 
 // -----------------------------------------------------------------------
 // startStream
@@ -249,7 +249,7 @@ void AudioManager::update()
 {
     for (int i = 0; i < activeHandleCount; )
     {
-        // mmEffectStatus returns MM_ACTIVE or MM_STOPS
+        // Remove finished sounds
         if (mmEffectStatus(activeHandles[i]) != MM_ACTIVE)
         {
             activeHandles[i] = activeHandles[--activeHandleCount];
