@@ -211,7 +211,7 @@ void OverlayMenu::gatherUsageStats() {
                 case ScriptThread::DONE:          strncpy(te.state,"DONE",   15); break;
                 default:                          strncpy(te.state,"???",    15); break;
             }
-            strncpy(te.blockId, t.currentBlockId.c_str(), sizeof(te.blockId) - 1);
+            strncpy(te.blockId, t.currentBlockId, sizeof(te.blockId) - 1);
             te.stackDepth     = (int)t.callStack.size();
             te.stepsThisFrame = t.stepsThisFrame;
         }

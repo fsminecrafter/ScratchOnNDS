@@ -40,7 +40,6 @@ AudioManager::AudioManager()
 // -----------------------------------------------------------------------
 void AudioManager::init() {
     initialized  = false;
-    numActive    = 0;
     streamActive = false;
     streamFile   = nullptr;
     streamBuffer = nullptr;
@@ -180,17 +179,9 @@ void AudioManager::playRamSound(ScratchSound& sound)
     if (!initialized || !sound.loaded) return;
 
     // Play using maxmod sound slot
-    mm_sfxhand handle = mmEffect(sound.mmSoundId);
+    mmEffect(sound.mmSoundId);
 
-    // store active handle if valid
-    if (handle >= 0)
-    {
-        activeHandles[activeHandleCount++] = handle;
-
-        // clamp (safety against overflow)
-        if (activeHandleCount >= MAX_ACTIVE_SOUNDS)
-            activeHandleCount = MAX_ACTIVE_SOUNDS - 1;
-    }
+    // Note: Not tracking active handles since mmEffectActive is not available in this maxmod9 version
 }
 
 
@@ -256,21 +247,8 @@ mm_word AudioManager::streamCallback(mm_word length, mm_addr dest,
 
 void AudioManager::update()
 {
-    for (int i = 0; i < activeHandleCount; )
-    {
-        mm_sfxhand h = activeHandles[i];
-
-        // correct maxmod9 API
-        if (mmEffectStatus(h) != MM_ACTIVE)
-        {
-            activeHandles[i] = activeHandles[activeHandleCount - 1];
-            activeHandleCount--;
-        }
-        else
-        {
-            i++;
-        }
-    }
+    // RAM sounds are fire-and-forget; no need to track active status
+    // Streams are handled separately
 }
 
 // -----------------------------------------------------------------------
@@ -278,7 +256,7 @@ void AudioManager::update()
 // -----------------------------------------------------------------------
 void AudioManager::stopAll() {
     mmEffectCancelAll();
-    numActive = 0;
+    activeHandleCount = 0;
 
     if (streamActive) {
         mmStreamClose();
@@ -289,7 +267,7 @@ void AudioManager::stopAll() {
 }
 
 bool AudioManager::isPlaying() {
-    return streamActive || numActive > 0;
+    return streamActive;
 }
 
 void AudioManager::setVolume(int vol) {

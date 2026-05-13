@@ -38,6 +38,8 @@
 *.exe
 *.out
 *.app
+*.elf
+*.nds
 
 # Build directories
 build/

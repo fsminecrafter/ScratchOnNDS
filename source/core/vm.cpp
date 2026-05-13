@@ -1142,22 +1142,13 @@ void ScratchVM::stopAll() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Variable access
 // ═══════════════════════════════════════════════════════════════════════════════
-/*
+
 ScratchValue ScratchVM::getVariable(ScratchSprite* sprite,
-                                     const std::string& name) {
+                                     const char* name) {
     // Search local sprite first, then stage (global)
-    auto search = [&](ScratchSprite* sp) -> ScratchValue* {
-        if (!sp) return nullptr;
-        for (auto& v : sp->variables)
-            if (v.name == name) return (ScratchValue*)&v;  // reinterpret hack — see below
-        return nullptr;
-    };
-    // Can't return reference to ScratchVariable::value directly as ScratchValue,
-    // so we construct from string.
     if (sprite) {
         for (auto& v : sprite->variables)
             if (v.name == name) {
-                // Try numeric parse for efficiency
                 ScratchValue sv;
                 sv.type = ScratchValue::STR;
                 sv.strVal = v.value;
@@ -1177,7 +1168,7 @@ ScratchValue ScratchVM::getVariable(ScratchSprite* sprite,
     return ScratchValue(0.0);
 }
 
-void ScratchVM::setVariable(ScratchSprite* sprite, const std::string& name,
+void ScratchVM::setVariable(ScratchSprite* sprite, const char* name,
                               const ScratchValue& val) {
     std::string s = val.toStr();
     if (sprite) {
@@ -1190,7 +1181,6 @@ void ScratchVM::setVariable(ScratchSprite* sprite, const std::string& name,
             if (v.name == name) { v.value = s; return; }
     }
 }
-*/
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // List access
