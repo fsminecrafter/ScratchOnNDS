@@ -155,9 +155,14 @@ void Renderer::init() {
     REG_DISPCNT = MODE_5_2D | DISPLAY_BG2_ACTIVE | DISPLAY_SPR_ACTIVE | DISPLAY_SPR_1D_LAYOUT;
     bgHandle = 2;
 
-    REG_BG2CNT = BG_BMP16_256x256 | BG_BMP_BASE(0) | BG_PRIORITY(3);
-    REG_BG2PA = 1 << 8;
-    REG_BG2PD = 1 << 8;
+    // 0x0080 = direct 16-bit color bitmap, size=0 (256x256), base=0, priority=3
+    REG_BG2CNT = 0x0083;
+    REG_BG2PA  = 0x0100;  // 1.0 in 8.8 fixed point (do NOT use 1<<8, same thing but explicit)
+    REG_BG2PB  = 0x0000;
+    REG_BG2PC  = 0x0000;
+    REG_BG2PD  = 0x0100;  // 1.0
+    REG_BG2X   = 0;
+    REG_BG2Y   = 0;
 
     dmaFillWords(0, BG_BMP16_VRAM, 256 * 192 * 2);
 
