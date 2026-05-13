@@ -169,28 +169,25 @@ void AudioManager::playSound(ScratchSprite* sprite, const std::string& soundName
 // Fix: store the sample descriptor in the ScratchSound itself (sampleDesc
 // field added to the struct). It stays valid as long as pcmData is valid.
 // -----------------------------------------------------------------------
-void AudioManager::playRamSound(ScratchSound& sound) {
-    if (!sound.pcmData || sound.pcmSize == 0) return;
-    if (numActive >= MAX_CHANNELS) return;  // all channels busy
+void AudioManager::playRamSound(ScratchSound& sound)
+{
+    // Maxmod sample descriptor must persist after function scope
+    static mm_ds_sample sampleDesc;
 
-    // Build the sample descriptor and store it in the sound so it persists.
-    sound.sampleDesc.loop_start  = 0;
-    sound.sampleDesc.length      = (mm_word)(sound.pcmSize /
-                                    (sound.mmSoundId == 1 ? 2 : 1));
-    sound.sampleDesc.format      = (mm_byte)sound.mmSoundId;
-    sound.sampleDesc.repeat_mode = 1;
-    sound.sampleDesc.base_rate   = (mm_hword)((sound.rate * 512) / 15768);
-    sound.sampleDesc.data        = sound.pcmData;
+    sampleDesc.loop_start  = 0;
+    sampleDesc.length      = (mm_word)(sound.pcmSize / 2);
+    sampleDesc.format      = (mm_byte)sound.mmSoundId;
+    sampleDesc.repeat_mode = 1;
+    sampleDesc.base_rate   = (mm_hword)((sound.rate * 512) / 15768);
+    sampleDesc.data        = sound.pcmData;
 
-    mm_sound_effect sfx;
-    sfx.sample  = &sound.sampleDesc;  // pointer to heap-resident struct
-    sfx.rate    = 0x400;
-    sfx.handle  = 0;
-    sfx.volume  = (mm_byte)((masterVolume * 255) / 100);
-    sfx.panning = 128;
+    // Play sound
+    mm_sfxhand handle = mmEffectPlay(&sampleDesc);
 
-    mm_sfxhand h = mmEffectEx(&sfx);
-    activeHandles[numActive++] = h;
+    if (handle >= 0 && activeHandleCount < MAX_ACTIVE_SOUNDS)
+    {
+        activeHandles[activeHandleCount++] = handle;
+    }
 }
 
 // -----------------------------------------------------------------------
