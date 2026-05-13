@@ -334,7 +334,7 @@ void ScratchVM::executeThread(ScriptThread& thread, double /*dt*/) {
                     if (lb && inputHas(lb, "SUBSTACK"))
                         strncpy(thread.currentBlockId, linputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); thread.currentBlockId[MAX_BLOCK_ID]= '\0';
                     else
-                        thread.currentBlockId[0] = \'\0\';
+                        thread.currentBlockId[0] = '\0';
                     return; // yield for one frame per iteration (cooperative)
                 }
                 if (!thread.currentBlockId[0]=='\0') return;
