@@ -41,7 +41,6 @@ private:
     static mm_word streamCallback(mm_word length, mm_addr dest, mm_stream_formats format);
 
     bool initialized;
-    mm_sfxhand activeHandles[MAX_CHANNELS];
     int        numActive;
     bool       streamActive;
     FILE*      streamFile;
