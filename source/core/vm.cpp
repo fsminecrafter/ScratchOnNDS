@@ -1136,7 +1136,7 @@ void ScratchVM::stopAll() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Variable access
 // ═══════════════════════════════════════════════════════════════════════════════
-
+/*
 ScratchValue ScratchVM::getVariable(ScratchSprite* sprite,
                                      const std::string& name) {
     // Search local sprite first, then stage (global)
@@ -1184,6 +1184,7 @@ void ScratchVM::setVariable(ScratchSprite* sprite, const std::string& name,
             if (v.name == name) { v.value = s; return; }
     }
 }
+*/
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // List access
@@ -1306,12 +1307,13 @@ bool ScratchVM::spriteTouchingEdge(ScratchSprite* s) const {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Utility
 // ═══════════════════════════════════════════════════════════════════════════════
-
+/*
 ScratchBlock* ScratchVM::getBlock(ScriptThread& t, const std::string& id) {
     for (auto& blk : t.sprite->blocks)
         if (blk.id == id) return &blk;
     return nullptr;
 }
+*/
 
 void ScratchVM::fireSpriteClicked(ScratchSprite* sprite) {
     startHatBlocks(BlockOpcode::EVENT_WHENTHISSPRITECLICKED, sprite);
