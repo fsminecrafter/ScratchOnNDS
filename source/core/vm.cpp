@@ -171,14 +171,14 @@ void ScratchVM::startHatBlocks(BlockOpcode hat, ScratchSprite* sprite,
         if (hat == BlockOpcode::EVENT_WHENBROADCASTRECEIVED) {
             // Case-insensitive broadcast match
             const std::string& bOpt = fieldVal(&b, "BROADCAST_OPTION");
-            if (bOpt.size() != field.size()) continue;
+            if (bOpt.size() != strlen(field)) continue;
             bool match = true;
             for (size_t i = 0; i < bOpt.size(); i++)
                 if (tolower((unsigned char)bOpt[i]) != tolower((unsigned char)field[i]))
                     { match = false; break; }
             if (!match) continue;
         }
-        if (!b.nextId.empty() && pendingThreads.size() < 64) {
+        if (b.nextId[0] != '\0' && pendingThreads.size() < 64) {
             ScriptThread t;
             t.sprite         = sprite;
             strncpy(t.currentBlockId, b.nextId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]= '\0';
@@ -190,7 +190,7 @@ void ScratchVM::startHatBlocks(BlockOpcode hat, ScratchSprite* sprite,
 }
 
 int ScratchVM::startHatBlocksCount(BlockOpcode hat, ScratchSprite* sprite,
-                                    const std::string& field) {
+                                    const char* field) {
     int before = (int)pendingThreads.size();
     startHatBlocks(hat, sprite, field);
     return (int)pendingThreads.size() - before;
