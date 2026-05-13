@@ -650,7 +650,7 @@ void Renderer::renderUI(ScratchProject& project, InputHandler& input) {
             for (auto& var : sprite.variables) {
                 if (var.visible && shown < 16) {
                     printf("%-10s: %.12s\n",
-                           var.name,                // fixed char[] — no .c_str()
+                           var.name.c_str(),
                            var.value.c_str());
                     shown++;
                 }
