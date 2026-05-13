@@ -72,9 +72,9 @@ struct StackFrame {
     static constexpr uint8_t F_WAIT_UNTIL      = 1 << 1;
     static constexpr uint8_t F_BROADCAST_WAIT  = 1 << 2;
 
-    bool isGlide()          const { return (flags & F_GLIDE) != 0; }
-    bool isWaitUntil()      const { return (flags & F_WAIT_UNTIL) != 0; }
-    bool isBroadcastWait()  const { return (flags & F_BROADCAST_WAIT) != 0; }
+    bool isGlide = false;
+    bool isWaitUntil = false;
+    bool isBroadcastWait = false;
 
     StackFrame() : remaining(-1),
                    glideStartX(0), glideStartY(0),
