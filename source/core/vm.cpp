@@ -659,8 +659,14 @@ ScratchValue ScratchVM::execControl(ScriptThread& t, ScratchBlock* b, bool& yiel
                 strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]= '\0';
                 fr.remaining     = -1;      // we check condition on each re-entry
                 // Store condition block id in condBlockId for re-check
-                fr.condBlockId = inputHas(b, "CONDITION")
-                                 ? inputGet(b,"CONDITION").blockId : "";
+                if (inputHas(b, "CONDITION")) {
+                    strncpy(fr.condBlockId,
+                            inputGet(b, "CONDITION").blockId,
+                            MAX_BLOCK_ID);
+                    fr.condBlockId[MAX_BLOCK_ID] = '\0';
+                } else {
+                    fr.condBlockId[0] = '\0';
+                }
                 t.callStack.push_back(fr);
                 strncpy(t.currentBlockId, inputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]= '\0';
                 yielded = true;
@@ -1258,21 +1264,21 @@ void ScratchVM::deleteClone(ScratchSprite* sprite) {
 ScratchValue ScratchVM::getSpriteProperty(
                         ScratchSprite* s,
                         const char* prop) {
-    if (prop == "x position")     return ScratchValue(s->x);
-    if (prop == "y position")     return ScratchValue(s->y);
-    if (prop == "direction")      return ScratchValue((double)s->direction);
-    if (prop == "costume #" || prop == "costume number")
+    if (strcmp(prop, "x position") == 0)     return ScratchValue(s->x);
+    if (strcmp(prop, "y position") == 0)    return ScratchValue(s->y);
+    if (strcmp(prop, "direction") == 0)     return ScratchValue((double)s->direction);
+    if (strcmp(prop, "costume #") == 0) || prop == "costume number")
         return ScratchValue((double)(s->currentCostume + 1));
-    if (prop == "costume name") {
+    if (strcmp(prop, "costume name") == 0) {
         if (!s->costumes.empty() && s->currentCostume < (int)s->costumes.size())
             return ScratchValue(s->costumes[s->currentCostume].name);
         return ScratchValue("");
     }
-    if (prop == "size")           return ScratchValue(s->size);
-    if (prop == "volume")         return ScratchValue(100.0);  // no per-sprite volume
-    if (prop == "backdrop #" || prop == "backdrop number")
+    if (strcmp(prop, "size") == 0)          return ScratchValue(s->size);
+    if (strcmp(prop, "volume") == 0)        return ScratchValue(100.0);  // no per-sprite volume
+    if (strcmp(prop, "backdrop #") == 0) || prop == "backdrop number")
         return ScratchValue((double)(s->currentCostume + 1));
-    if (prop == "backdrop name") {
+    if (strcmp(prop, "backdrop name") {
         if (!s->costumes.empty() && s->currentCostume < (int)s->costumes.size())
             return ScratchValue(s->costumes[s->currentCostume].name);
         return ScratchValue("");
