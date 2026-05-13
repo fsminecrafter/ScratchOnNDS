@@ -317,7 +317,11 @@ void ScratchVM::executeThread(ScriptThread& thread, double /*dt*/) {
                     thread.callStack.pop_back();
                     // Continue after the loop block
                     if (!thread.callStack.empty())
-                        thread.currentBlockId = thread.callStack.back().returnBlockId;
+                        strncpy(thread.currentBlockId,
+                                thread.callStack.back().returnBlockId,
+                                MAX_BLOCK_ID);
+                    
+                        thread.currentBlockId[MAX_BLOCK_ID] = '\0';
                     else {
                         // find next after the loop's own block
                         ScratchBlock* lb = getBlock(thread, frame.loopBlockId);
@@ -332,7 +336,7 @@ void ScratchVM::executeThread(ScriptThread& thread, double /*dt*/) {
                     // Repeat next iteration: jump back to substack start
                     ScratchBlock* lb = getBlock(thread, frame.loopBlockId);
                     if (lb && inputHas(lb, "SUBSTACK"))
-                        strncpy(thread.currentBlockId, linputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); thread.currentBlockId[MAX_BLOCK_ID]= '\0';
+                        strncpy(thread.currentBlockId, inputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); thread.currentBlockId[MAX_BLOCK_ID]= '\0';
                     else
                         thread.currentBlockId[0] = '\0';
                     return; // yield for one frame per iteration (cooperative)
