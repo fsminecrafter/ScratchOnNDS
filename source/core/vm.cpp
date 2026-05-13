@@ -311,7 +311,7 @@ void ScratchVM::executeThread(ScriptThread& thread, double /*dt*/) {
             // End of chain — unwind call stack
             while (!thread.callStack.empty()) {
                 StackFrame& frame = thread.callStack.back();
-                if (frame.isGlide() || frame.isWaitUntil() || frame.isBroadcastWait()) {
+                if (frame.isGlide || frame.isWaitUntil || frame.isBroadcastWait) {
                     return; // handled in step()
                 }
                 if (frame.remaining > 0) frame.remaining--;
@@ -632,7 +632,7 @@ ScratchValue ScratchVM::execControl(ScriptThread& t, ScratchBlock* b, bool& yiel
                         evaluateInput(t, inputGet(b,"CONDITION")).toBool();
             if (!cond) {
                 StackFrame fr;
-                fr.setWaitUntil(true);
+                fr.isWaitUntil = true;
                 if (inputHas(b, "CONDITION")) {
                     strncpy(fr.condBlockId,
                             inputGet(b, "CONDITION").blockId,
@@ -1120,7 +1120,7 @@ void ScratchVM::broadcastAndWait(ScriptThread& caller, const std::string& name) 
     if (br.threadsLaunched == 0) return;  // no one listening, don't wait
     broadcasts.push_back(br);
     StackFrame fr;
-    fr.setBroadcastWait(true);
+    fr.isBroadcastWait = true;
     strncpy(fr.broadcastName, name.c_str(), 31); fr.broadcastName[31]= '\0';
     fr.remaining       = 1;
     fr.loopBlockId[0] = '\0';
