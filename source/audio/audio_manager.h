@@ -26,7 +26,15 @@ public:
     void setVolume(int vol);
 
 private:
-    AudioManager() {}
+    AudioManager::AudioManager()
+    {
+        activeHandleCount = 0;
+    }
+
+    static constexpr int MAX_ACTIVE_SOUNDS = 32;
+
+    mm_sfxhand activeHandles[MAX_ACTIVE_SOUNDS];
+    int activeHandleCount;
 
     bool loadWavToRam(ScratchSound& sound, const char* path);
     bool loadMp3ToRam(ScratchSound& sound, const char* path);
