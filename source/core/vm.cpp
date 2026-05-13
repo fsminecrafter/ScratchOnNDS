@@ -1080,8 +1080,9 @@ ScratchValue ScratchVM::evaluateInput(ScriptThread& thread, const ScratchInput& 
     return ScratchValue(input.strValue);
 }
 
-ScratchValue ScratchVM::evaluateReporter(ScriptThread& thread,
-                                          const std::string& blockId) {
+ScratchValue ScratchVM::evaluateReporter(
+                            ScriptThread& thread,
+                            const std::string& blockId) {
     bool yielded = false;
     ScriptThread::State saved = thread.state;
     thread.state = ScriptThread::RUNNING;
