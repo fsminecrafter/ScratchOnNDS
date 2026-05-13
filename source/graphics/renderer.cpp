@@ -150,7 +150,7 @@ void Renderer::init() {
     memset(SPRITE_PALETTE, 0, 256 * sizeof(uint16_t));
     invalidateOamCache();
 
-    oamInit(&oamMain, SpriteMapping_1D_128, false);
+    oamInit(&oamMain, SpriteMapping_1D_64, false);
 
     REG_DISPCNT = MODE_5_2D | DISPLAY_BG2_ACTIVE | DISPLAY_SPR_ACTIVE | DISPLAY_SPR_1D_LAYOUT;
     bgHandle = 2;
