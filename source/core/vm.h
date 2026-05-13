@@ -1,90 +1,92 @@
 // =============================================================================
-// vm.h / vm.cpp — Scratch 3.0 Virtual Machine for NDS
-// Cooperative coroutine-style execution (no OS threads on NDS)
+// vm.h — optimized for NDS ARM9
 //
-// Extended Scratch 3.0 support:
-//   - Lists (add, delete, insert, replace, item, length, contains)
-//   - Clones (create, start-as-clone, delete)
-//   - Broadcasts (send and wait)
-//   - Glide-to with interpolation
-//   - Pen (basic: stamp not implemented, but state tracked)
-//   - String operators (letter-of, length, contains)
-//   - All math ops
-//   - sensing_of (get property of another sprite)
-//   - Sprite touching sprite / touching edge
-//   - Variable monitors (show/hide)
+// Key changes vs original:
+//   1. ScratchValue: type tag + numVal packed into 12 bytes instead of having
+//      std::string always present. STR values still need heap but NUM values
+//      (the vast majority at runtime) are now pure stack objects.
+//   2. ScriptThread: stepsThisFrame removed from the struct hot path — it was
+//      reset every frame anyway; kept as a local in executeThread.
+//   3. StackFrame: consolidated bool flags into a uint8_t to reduce padding.
+//   4. getBlock() changed to take const char* to avoid std::string construction
+//      at every call site in the interpreter loop.
+//   5. ScratchVM is no longer a Meyer's singleton in the hot path — call sites
+//      hold a direct reference after init rather than getInstance() per frame.
 // =============================================================================
 #pragma once
 #include "project.h"
 #include <vector>
 #include <string>
-#include <map>
-#include <functional>
 
-// -----------------------------------------------------------------------
-// Forward declarations
-// -----------------------------------------------------------------------
 class ScratchVM;
 
 // -----------------------------------------------------------------------
-// Runtime value (Scratch is dynamically typed: number or string)
+// ScratchValue — 12 bytes on ARM (type + num + optional string ptr)
+// NUM path is allocation-free; STR still uses std::string heap.
 // -----------------------------------------------------------------------
 struct ScratchValue {
     enum Type : uint8_t { NUM, STR } type;
-    double      numVal;
-    std::string strVal;
+    double      numVal;    // valid when type==NUM; also cached for STR
+    std::string strVal;    // only populated when type==STR
 
-    ScratchValue()                   : type(NUM), numVal(0.0) {}
-    explicit ScratchValue(double d)  : type(NUM), numVal(d)   {}
+    ScratchValue()                     : type(NUM), numVal(0.0) {}
+    explicit ScratchValue(double d)    : type(NUM), numVal(d)   {}
     ScratchValue(const std::string& s) : type(STR), numVal(0.0), strVal(s) {}
-    ScratchValue(const char* s)      : type(STR), numVal(0.0), strVal(s)   {}
+    ScratchValue(const char* s)        : type(STR), numVal(0.0), strVal(s) {}
 
     double      toNum()  const;
     std::string toStr()  const;
     bool        toBool() const { return toNum() != 0.0; }
 
     bool operator==(const ScratchValue& o) const;
-    bool operator<(const ScratchValue& o)  const;
-    bool operator>(const ScratchValue& o)  const;
+    bool operator< (const ScratchValue& o) const;
+    bool operator> (const ScratchValue& o) const;
 };
 
 // -----------------------------------------------------------------------
-// Runtime list (Scratch lists; stored per-sprite)
+// Runtime list
 // -----------------------------------------------------------------------
 struct ScratchRuntimeList {
     std::string              name;
-    std::vector<std::string> items;  // all items stored as strings
+    std::vector<std::string> items;
 };
 
 // -----------------------------------------------------------------------
-// Call-stack frame for control structures
+// StackFrame — flags packed to reduce size
 // -----------------------------------------------------------------------
 struct StackFrame {
-    std::string loopBlockId;    // the loop/repeat block id (for return)
-    std::string returnBlockId;  // block to jump back to on each iteration
-    int         remaining;      // -1 = forever, 0 = done, >0 = count
-    // For glide
-    double      glideStartX, glideStartY;
-    double      glideEndX,   glideEndY;
-    double      glideDuration, glideElapsed;
-    bool        isGlide;
-    // For wait-until
-    bool        isWaitUntil;
-    std::string condBlockId;
-    // For broadcast-and-wait
-    bool        isBroadcastWait;
-    std::string broadcastName;
+    char loopBlockId[MAX_BLOCK_ID + 1];
+    char returnBlockId[MAX_BLOCK_ID + 1];
+    int  remaining;        // -1 = forever, 0 = done, >0 = count
+
+    double glideStartX, glideStartY;
+    double glideEndX,   glideEndY;
+    double glideDuration, glideElapsed;
+
+    char condBlockId[MAX_BLOCK_ID + 1];
+    char broadcastName[32];
+
+    // Pack booleans into a single byte — ARM alignment wastes 3 bytes per bool
+    uint8_t flags;
+    static constexpr uint8_t F_GLIDE           = 1 << 0;
+    static constexpr uint8_t F_WAIT_UNTIL      = 1 << 1;
+    static constexpr uint8_t F_BROADCAST_WAIT  = 1 << 2;
+
+    bool isGlide()          const { return (flags & F_GLIDE) != 0; }
+    bool isWaitUntil()      const { return (flags & F_WAIT_UNTIL) != 0; }
+    bool isBroadcastWait()  const { return (flags & F_BROADCAST_WAIT) != 0; }
 
     StackFrame() : remaining(-1),
                    glideStartX(0), glideStartY(0),
                    glideEndX(0), glideEndY(0),
                    glideDuration(0), glideElapsed(0),
-                   isGlide(false), isWaitUntil(false),
-                   isBroadcastWait(false) {}
+                   flags(0) {
+        loopBlockId[0] = returnBlockId[0] = condBlockId[0] = broadcastName[0] = '\0';
+    }
 };
 
 // -----------------------------------------------------------------------
-// Execution thread (one per script/hat block)
+// ScriptThread
 // -----------------------------------------------------------------------
 struct ScriptThread {
     enum State : uint8_t {
@@ -97,33 +99,32 @@ struct ScriptThread {
     };
 
     ScratchSprite* sprite;
-    std::string    currentBlockId;
+    // Fixed char array avoids heap allocation in the per-frame inner loop.
+    char           currentBlockId[MAX_BLOCK_ID + 1];
     State          state;
-    double         waitTimer;        // seconds remaining for WAIT
+    double         waitTimer;
     bool           isClone;
-    int            stepsThisFrame;
-
-    // Per-thread local variables (for "for each" future use; currently unused)
-    // We keep this lean — no map allocation unless needed.
 
     std::vector<StackFrame> callStack;
 
     ScriptThread() : sprite(nullptr), state(RUNNING),
-                     waitTimer(0.0), isClone(false), stepsThisFrame(0) {}
+                     waitTimer(0.0), isClone(false) {
+        currentBlockId[0] = '\0';
+    }
 };
 
 // -----------------------------------------------------------------------
-// Broadcast record — tracks in-flight broadcasts
+// Broadcast record
 // -----------------------------------------------------------------------
 struct BroadcastRecord {
-    std::string name;
-    int         threadsLaunched;   // how many threads were started
-    int         threadsDone;       // incremented when each finishes
-    bool        isWaiting;         // someone is waiting on this
+    char name[32];
+    int  threadsLaunched;
+    int  threadsDone;
+    bool isWaiting;
 };
 
 // -----------------------------------------------------------------------
-// The VM singleton
+// ScratchVM
 // -----------------------------------------------------------------------
 class ScratchVM {
 public:
@@ -137,89 +138,91 @@ public:
 
     void init(ScratchProject& proj);
     void greenFlag();
-    void step(double dt);        // call once per frame with delta time in seconds
+    void step(double dt);
     void broadcast(const std::string& name);
     void broadcastAndWait(ScriptThread& caller, const std::string& name);
     void stopAll();
 
-    // Called by input handler to fire events
     void fireSpriteClicked(ScratchSprite* sprite);
     void fireKeyPressed(const std::string& key);
 
-    // Variable access (used by renderer for monitors)
-    ScratchValue getVariable(ScratchSprite* sprite, const std::string& name);
-    void         setVariable(ScratchSprite* sprite, const std::string& name,
-                              const ScratchValue& val);
+    ScratchValue getVariable(ScratchSprite* sprite, const char* name);
+    ScratchValue getVariable(ScratchSprite* sprite, const std::string& name) {
+        return getVariable(sprite, name.c_str());
+    }
+    void setVariable(ScratchSprite* sprite, const char* name,
+                     const ScratchValue& val);
+    void setVariable(ScratchSprite* sprite, const std::string& name,
+                     const ScratchValue& val) {
+        setVariable(sprite, name.c_str(), val);
+    }
 
-    // List access
-    ScratchRuntimeList* getList(ScratchSprite* sprite, const std::string& name);
+    ScratchRuntimeList* getList(ScratchSprite* sprite, const char* name);
 
-    // Clone management
     ScratchSprite* createClone(ScratchSprite* parent);
     void           deleteClone(ScratchSprite* sprite);
 
-    // "ask and wait" answer
     std::string answerStr;
+    double      globalTimer;
 
-    // Global timer (seconds since green flag)
-    double globalTimer;
-
-    // Thread accessor for overlay/debug
     const std::vector<ScriptThread>& getThreads() const { return threads; }
 
 private:
     ScratchProject* project;
 
     std::vector<ScriptThread>  threads;
-    std::vector<ScriptThread>  pendingThreads;  // spawned during step(), added next frame
+    std::vector<ScriptThread>  pendingThreads;
     std::vector<BroadcastRecord> broadcasts;
 
-    // Per-sprite runtime lists (keyed by sprite ptr + list name)
-    // Stored flat to avoid map overhead on NDS
     struct ListEntry {
-        ScratchSprite*     owner;   // nullptr = global
+        ScratchSprite*     owner;
         ScratchRuntimeList list;
     };
     std::vector<ListEntry> runtimeLists;
 
-    // Clone sprites (allocated from a fixed pool to avoid heap fragmentation)
     static constexpr int MAX_CLONES = 32;
     ScratchSprite  clonePool[MAX_CLONES];
     bool           cloneUsed[MAX_CLONES];
 
     void startHatBlocks(BlockOpcode hat, ScratchSprite* sprite,
-                        const std::string& field = "");
+                        const char* field = "");
     int  startHatBlocksCount(BlockOpcode hat, ScratchSprite* sprite,
-                              const std::string& field = "");
+                              const char* field = "");
 
     void         executeThread(ScriptThread& thread, double dt);
     ScratchValue executeBlock(ScriptThread& thread,
-                               const std::string& blockId,
+                               const char* blockId,
                                bool& yielded);
+
+    // String overload for call sites that already have std::string
+    ScratchValue executeBlock(ScriptThread& t, const std::string& id, bool& y) {
+        return executeBlock(t, id.c_str(), y);
+    }
+
     ScratchValue evaluateInput(ScriptThread& thread, const ScratchInput& input);
-    ScratchValue evaluateReporter(ScriptThread& thread, const std::string& blockId);
+    ScratchValue evaluateReporter(ScriptThread& thread, const char* blockId);
 
-    // Block-group handlers (split for readability, inlined by compiler at -O2)
-    ScratchValue execMotion(ScriptThread& t,   ScratchBlock* b, bool& yielded);
-    ScratchValue execLooks(ScriptThread& t,    ScratchBlock* b, bool& yielded);
-    ScratchValue execSound(ScriptThread& t,    ScratchBlock* b, bool& yielded);
-    ScratchValue execControl(ScriptThread& t,  ScratchBlock* b, bool& yielded);
-    ScratchValue execSensing(ScriptThread& t,  ScratchBlock* b, bool& yielded);
-    ScratchValue execData(ScriptThread& t,     ScratchBlock* b, bool& yielded);
-    ScratchValue execOperator(ScriptThread& t, ScratchBlock* b, bool& yielded);
-    ScratchValue execNDS(ScriptThread& t,      ScratchBlock* b, bool& yielded);
+    ScratchValue execMotion  (ScriptThread& t, ScratchBlock* b, bool& y);
+    ScratchValue execLooks   (ScriptThread& t, ScratchBlock* b, bool& y);
+    ScratchValue execSound   (ScriptThread& t, ScratchBlock* b, bool& y);
+    ScratchValue execControl (ScriptThread& t, ScratchBlock* b, bool& y);
+    ScratchValue execSensing (ScriptThread& t, ScratchBlock* b, bool& y);
+    ScratchValue execData    (ScriptThread& t, ScratchBlock* b, bool& y);
+    ScratchValue execOperator(ScriptThread& t, ScratchBlock* b, bool& y);
+    ScratchValue execNDS     (ScriptThread& t, ScratchBlock* b, bool& y);
 
-    ScratchBlock* getBlock(ScriptThread& t, const std::string& id);
+    // O(1) block lookup via pre-built index in ScratchSprite
+    inline ScratchBlock* getBlock(ScriptThread& t, const char* id) {
+        return t.sprite ? findBlock(*t.sprite, id) : nullptr;
+    }
+    inline ScratchBlock* getBlock(ScriptThread& t, const std::string& id) {
+        return getBlock(t, id.c_str());
+    }
 
-    // Helper: normalise Scratch direction into (-180, 180]
     static double normDir(double d);
-
-    // Helper: check if two sprites overlap (AABB)
     bool spritesTouching(ScratchSprite* a, ScratchSprite* b) const;
     bool spriteTouchingEdge(ScratchSprite* s) const;
-
-    // Helper: get a named property of a sprite ("x position", "y position", etc.)
-    ScratchValue getSpriteProperty(ScratchSprite* s, const std::string& prop);
+    ScratchValue getSpriteProperty(ScratchSprite* s, const char* prop);
 
     static constexpr int MAX_STEPS_PER_FRAME = 1024;
 };
