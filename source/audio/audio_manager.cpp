@@ -256,15 +256,13 @@ mm_word AudioManager::streamCallback(mm_word length, mm_addr dest,
 
 void AudioManager::update()
 {
-    // compact active handle list by removing finished sounds
     for (int i = 0; i < activeHandleCount; )
     {
         mm_sfxhand h = activeHandles[i];
 
-        // maxmod: returns false when sound is finished
-        if (!mmEffectActive(h))
+        // correct maxmod9 API
+        if (mmEffectStatus(h) != MM_ACTIVE)
         {
-            // remove by swapping last element into current slot
             activeHandles[i] = activeHandles[activeHandleCount - 1];
             activeHandleCount--;
         }
