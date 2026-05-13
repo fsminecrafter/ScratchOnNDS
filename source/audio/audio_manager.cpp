@@ -244,9 +244,9 @@ void AudioManager::update()
 {
     for (int i = 0; i < activeHandleCount; )
     {
+        // mmEffectStatus returns MM_ACTIVE or MM_STOPS
         if (mmEffectStatus(activeHandles[i]) != MM_ACTIVE)
         {
-            // remove by swap-back
             activeHandles[i] = activeHandles[--activeHandleCount];
         }
         else
