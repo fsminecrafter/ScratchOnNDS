@@ -11,6 +11,7 @@
 
 class AudioManager {
 public:
+    AudioManager();
     static AudioManager& getInstance() {
         static AudioManager inst;
         return inst;
@@ -25,11 +26,10 @@ public:
     bool isPlaying();
     void setVolume(int vol);
 
+    void playRamSound(ScratchSound& sound);
+    void update();
+
 private:
-    AudioManager::AudioManager()
-    {
-        activeHandleCount = 0;
-    }
 
     static constexpr int MAX_ACTIVE_SOUNDS = 32;
 
@@ -38,7 +38,6 @@ private:
 
     bool loadWavToRam(ScratchSound& sound, const char* path);
     bool loadMp3ToRam(ScratchSound& sound, const char* path);
-    void playRamSound(ScratchSound& sound);
     void startStream(ScratchSound& sound);
     static mm_word streamCallback(mm_word length, mm_addr dest, mm_stream_formats format);
 
