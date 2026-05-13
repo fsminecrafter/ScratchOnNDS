@@ -1117,7 +1117,7 @@ void ScratchVM::broadcastAndWait(ScriptThread& caller, const std::string& name) 
     fr.setBroadcastWait(true);
     strncpy(fr.broadcastName, name.c_str(), 31); fr.broadcastName[31]= '\0';
     fr.remaining       = 1;
-    fr.loopBlockId     = "";
+    fr.loopBlockId[0] = '\0';
     caller.callStack.push_back(fr);
     caller.state = ScriptThread::WAITING_BROADCAST;
 }
