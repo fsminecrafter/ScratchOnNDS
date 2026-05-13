@@ -177,12 +177,19 @@ void AudioManager::playSound(ScratchSprite* sprite, const std::string& soundName
 // -----------------------------------------------------------------------
 void AudioManager::playRamSound(ScratchSound& sound)
 {
-    // Play effect using maxmod SFX ID
+    if (!initialized || !sound.loaded) return;
+
+    // Play using maxmod sound slot
     mm_sfxhand handle = mmEffect(sound.mmSoundId);
 
-    if (handle >= 0 && activeHandleCount < MAX_ACTIVE_SOUNDS)
+    // store active handle if valid
+    if (handle >= 0)
     {
         activeHandles[activeHandleCount++] = handle;
+
+        // clamp (safety against overflow)
+        if (activeHandleCount >= MAX_ACTIVE_SOUNDS)
+            activeHandleCount = MAX_ACTIVE_SOUNDS - 1;
     }
 }
 
@@ -249,11 +256,17 @@ mm_word AudioManager::streamCallback(mm_word length, mm_addr dest,
 
 void AudioManager::update()
 {
+    // compact active handle list by removing finished sounds
     for (int i = 0; i < activeHandleCount; )
     {
-        if (mmEffectStatus(activeHandles[i]) != MM_PLAYING)
+        mm_sfxhand h = activeHandles[i];
+
+        // maxmod: returns false when sound is finished
+        if (!mmEffectActive(h))
         {
-            activeHandles[i] = activeHandles[--activeHandleCount];
+            // remove by swapping last element into current slot
+            activeHandles[i] = activeHandles[activeHandleCount - 1];
+            activeHandleCount--;
         }
         else
         {
