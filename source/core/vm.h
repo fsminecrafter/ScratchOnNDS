@@ -106,6 +106,7 @@ struct ScriptThread {
     bool           isClone;
 
     std::vector<StackFrame> callStack;
+    int stepsThisFrame = 0;
 
     ScriptThread() : sprite(nullptr), state(RUNNING),
                      waitTimer(0.0), isClone(false) {
