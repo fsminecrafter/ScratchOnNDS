@@ -18,7 +18,6 @@ public:
     }
 
     void init();
-    void update();
 
     void loadSounds(ScratchProject& project, const char* extractDir);
     void playSound(ScratchSprite* sprite, const std::string& soundName);
