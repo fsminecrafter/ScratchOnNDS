@@ -1273,10 +1273,14 @@ ScratchValue ScratchVM::getSpriteProperty(ScratchSprite* s, const char* prop)
 
     if (strcmp(prop, "costume #") == 0 ||
         strcmp(prop, "costume number") == 0)
-        return ScratchValue((double)s->costumeIndex);
+        return ScratchValue((double)s->currentCostume);
 
     if (strcmp(prop, "costume name") == 0)
-        return ScratchValue(s->costumeName);
+        return ScratchValue(
+            s->costumes.empty()
+                ? ""
+                : s->costumes[s->currentCostume].name.c_str()
+        );
 
     if (strcmp(prop, "size") == 0)
         return ScratchValue(s->size);
@@ -1284,14 +1288,14 @@ ScratchValue ScratchVM::getSpriteProperty(ScratchSprite* s, const char* prop)
     if (strcmp(prop, "volume") == 0)
         return ScratchValue(100.0);
 
+    // Backdrop is NOT sprite-owned → ignore or default
     if (strcmp(prop, "backdrop #") == 0 ||
         strcmp(prop, "backdrop number") == 0)
-        return ScratchValue((double)s->backdropIndex);
+        return ScratchValue(0);
 
     if (strcmp(prop, "backdrop name") == 0)
-        return ScratchValue(s->backdropName);
+        return ScratchValue("");
 
-    // Variable fallback
     return getVariable(s, prop);
 }
 
