@@ -246,11 +246,12 @@ mm_word AudioManager::streamCallback(mm_word length, mm_addr dest,
 // Now we walk the active list and compact out handles for sounds that
 // have completed. mmEffectActive() returns false when a sound is done.
 // -----------------------------------------------------------------------
+
 void AudioManager::update()
 {
     for (int i = 0; i < activeHandleCount; )
     {
-        if (!mmEffectPlaying(activeHandles[i]))
+        if (mmEffectStatus(activeHandles[i]) != MM_PLAYING)
         {
             activeHandles[i] = activeHandles[--activeHandleCount];
         }
