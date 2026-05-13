@@ -181,7 +181,7 @@ void ScratchVM::startHatBlocks(BlockOpcode hat, ScratchSprite* sprite,
         if (!b.nextId.empty() && pendingThreads.size() < 64) {
             ScriptThread t;
             t.sprite         = sprite;
-            strncpy(t.currentBlockId, b.nextId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]=\'\0\';
+            strncpy(t.currentBlockId, b.nextId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]= '\0';
             t.state          = ScriptThread::RUNNING;
             t.isClone        = sprite->isClone;
             pendingThreads.push_back(std::move(t));
@@ -303,8 +303,8 @@ void ScratchVM::executeThread(ScriptThread& thread, double /*dt*/) {
         if (yielded) return;
 
         ScratchBlock* b = getBlock(thread, thread.currentBlockId);
-        if (b && !b->nextId.empty()) {
-            strncpy(thread.currentBlockId, b->nextId, MAX_BLOCK_ID); thread.currentBlockId[MAX_BLOCK_ID]=\'\0\';
+        if (b && b->nextId[0] != '\0') {
+            strncpy(thread.currentBlockId, b->nextId, MAX_BLOCK_ID); thread.currentBlockId[MAX_BLOCK_ID]= '\0';
         } else {
             // End of chain — unwind call stack
             while (!thread.callStack.empty()) {
@@ -321,13 +321,18 @@ void ScratchVM::executeThread(ScriptThread& thread, double /*dt*/) {
                     else {
                         // find next after the loop's own block
                         ScratchBlock* lb = getBlock(thread, frame.loopBlockId);
-                        thread.currentBlockId = lb ? lb->nextId : "";
+                        if (lb) {
+                            strncpy(thread.currentBlockId, lb->nextId, MAX_BLOCK_ID);
+                            thread.currentBlockId[MAX_BLOCK_ID] = '\0';
+                        } else {
+                            thread.currentBlockId[0] = '\0';
+                        }
                     }
                 } else {
                     // Repeat next iteration: jump back to substack start
                     ScratchBlock* lb = getBlock(thread, frame.loopBlockId);
                     if (lb && inputHas(lb, "SUBSTACK"))
-                        strncpy(thread.currentBlockId, linputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); thread.currentBlockId[MAX_BLOCK_ID]=\'\0\';
+                        strncpy(thread.currentBlockId, linputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); thread.currentBlockId[MAX_BLOCK_ID]= '\0';
                     else
                         thread.currentBlockId[0] = \'\0\';
                     return; // yield for one frame per iteration (cooperative)
@@ -583,22 +588,22 @@ ScratchValue ScratchVM::execControl(ScriptThread& t, ScratchBlock* b, bool& yiel
             int times = (int)evaluateInput(t, inputGet(b,"TIMES")).toNum();
             if (times <= 0 || !inputHas(b, "SUBSTACK")) break;
             StackFrame fr;
-            strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]=\'\0\';
-            strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]=\'\0\';
+            strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]= '\0';
+            strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]= '\0';
             fr.remaining     = times;
             t.callStack.push_back(fr);
-            strncpy(t.currentBlockId, inputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]=\'\0\';
+            strncpy(t.currentBlockId, inputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]= '\0';
             yielded = true;
             break;
         }
         case BlockOpcode::CONTROL_FOREVER: {
             if (!inputHas(b, "SUBSTACK")) break;
             StackFrame fr;
-            strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]=\'\0\';
-            strncpy(fr.returnBlockId, b->id, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]=\'\0\';  // forever never returns past itself
+            strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]= '\0';
+            strncpy(fr.returnBlockId, b->id, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]= '\0';  // forever never returns past itself
             fr.remaining     = -1;
             t.callStack.push_back(fr);
-            strncpy(t.currentBlockId, inputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]=\'\0\';
+            strncpy(t.currentBlockId, inputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]= '\0';
             yielded = true;
             break;
         }
@@ -607,11 +612,11 @@ ScratchValue ScratchVM::execControl(ScriptThread& t, ScratchBlock* b, bool& yiel
                         evaluateInput(t, inputGet(b,"CONDITION")).toBool();
             if (cond && inputHas(b, "SUBSTACK")) {
                 StackFrame fr;
-                strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]=\'\0\';
-                strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]=\'\0\';
+                strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]= '\0';
+                strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]= '\0';
                 fr.remaining     = 1;
                 t.callStack.push_back(fr);
-                strncpy(t.currentBlockId, inputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]=\'\0\';
+                strncpy(t.currentBlockId, inputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]= '\0';
                 yielded = true;
             }
             break;
@@ -622,11 +627,11 @@ ScratchValue ScratchVM::execControl(ScriptThread& t, ScratchBlock* b, bool& yiel
             const char* key = cond ? "SUBSTACK" : "SUBSTACK2";
             if (inputHas(b, key)) {
                 StackFrame fr;
-                strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]=\'\0\';
-                strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]=\'\0\';
+                strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]= '\0';
+                strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]= '\0';
                 fr.remaining     = 1;
                 t.callStack.push_back(fr);
-                strncpy(t.currentBlockId, b->inputs.at(key).blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]=\'\0\';
+                strncpy(t.currentBlockId, b->inputs.at(key).blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]= '\0';
                 yielded = true;
             }
             break;
@@ -639,8 +644,8 @@ ScratchValue ScratchVM::execControl(ScriptThread& t, ScratchBlock* b, bool& yiel
                 fr.isWaitUntil = true;
                 fr.condBlockId = inputHas(b, "CONDITION")
                                  ? inputGet(b,"CONDITION").blockId : "";
-                strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]=\'\0\';
-                strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]=\'\0\';
+                strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]= '\0';
+                strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]= '\0';
                 fr.remaining = -1;
                 t.callStack.push_back(fr);
                 t.state  = ScriptThread::WAITING_UNTIL;
@@ -653,14 +658,14 @@ ScratchValue ScratchVM::execControl(ScriptThread& t, ScratchBlock* b, bool& yiel
                         evaluateInput(t, inputGet(b,"CONDITION")).toBool();
             if (!cond && inputHas(b, "SUBSTACK")) {
                 StackFrame fr;
-                strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]=\'\0\';
-                strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]=\'\0\';
+                strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]= '\0';
+                strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]= '\0';
                 fr.remaining     = -1;      // we check condition on each re-entry
                 // Store condition block id in condBlockId for re-check
                 fr.condBlockId = inputHas(b, "CONDITION")
                                  ? inputGet(b,"CONDITION").blockId : "";
                 t.callStack.push_back(fr);
-                strncpy(t.currentBlockId, inputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]=\'\0\';
+                strncpy(t.currentBlockId, inputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]= '\0';
                 yielded = true;
             }
             break;
@@ -1101,7 +1106,7 @@ void ScratchVM::broadcast(const std::string& name) {
 
 void ScratchVM::broadcastAndWait(ScriptThread& caller, const std::string& name) {
     BroadcastRecord br;
-    strncpy(br.name, name.c_str(), 31); br.name[31]=\'\0\';
+    strncpy(br.name, name.c_str(), 31); br.name[31]= '\0';
     br.threadsLaunched   = 0;
     br.threadsDone       = 0;
     br.isWaiting         = true;
@@ -1112,7 +1117,7 @@ void ScratchVM::broadcastAndWait(ScriptThread& caller, const std::string& name) 
     broadcasts.push_back(br);
     StackFrame fr;
     fr.isBroadcastWait = true;
-    strncpy(fr.broadcastName, name.c_str(), 31); fr.broadcastName[31]=\'\0\';
+    strncpy(fr.broadcastName, name.c_str(), 31); fr.broadcastName[31]= '\0';
     fr.remaining       = 1;
     fr.loopBlockId     = "";
     caller.callStack.push_back(fr);
