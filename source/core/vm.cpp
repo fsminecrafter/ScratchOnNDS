@@ -1291,7 +1291,7 @@ ScratchValue ScratchVM::getSpriteProperty(ScratchSprite* s, const char* prop)
     // Backdrop is NOT sprite-owned → ignore or default
     if (strcmp(prop, "backdrop #") == 0 ||
         strcmp(prop, "backdrop number") == 0)
-        return ScratchValue(0);
+        return ScratchValue(0.0);
 
     if (strcmp(prop, "backdrop name") == 0)
         return ScratchValue("");
