@@ -1,13 +1,21 @@
 // =============================================================================
 // project.cpp — Parses Scratch 3.0 project.json using jsmn
+// Matches the optimized project.h:
+//   - ScratchBlock uses fixed char arrays (no std::string for id/nextId/etc.)
+//   - ScratchBlock inputs/fields use flat arrays (no std::map)
+//   - ScratchVariable uses fixed char arrays for id and name
+//   - opcodeFromStr takes (const char*, int)
+//   - parseBlockInputs / parseBlockFields take ScratchBlock& (not map refs)
 // =============================================================================
+#ifndef JSMN_STATIC
 #define JSMN_STATIC
+#endif
 #include "jsmn.h"
-
 #include "project.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <algorithm>
 
 // -----------------------------------------------------------------------
 // jsmn helpers
@@ -21,6 +29,15 @@ static bool jsmnEq(const char* json, jsmntok_t* tok, const char* s) {
 static std::string jsmnStr(const char* json, jsmntok_t* tok) {
     if (!tok || tok->type == JSMN_UNDEFINED) return "";
     return std::string(json + tok->start, tok->end - tok->start);
+}
+
+// Copy jsmn token string into a fixed-size buffer (null-terminates, truncates)
+static void jsmnStrCopy(const char* json, jsmntok_t* tok, char* buf, int maxLen) {
+    if (!tok || tok->type == JSMN_UNDEFINED) { buf[0] = '\0'; return; }
+    int len = tok->end - tok->start;
+    if (len >= maxLen) len = maxLen - 1;
+    strncpy(buf, json + tok->start, len);
+    buf[len] = '\0';
 }
 
 static double jsmnNum(const char* json, jsmntok_t* tok) {
@@ -70,7 +87,6 @@ bool ScratchProject::load(const char* dir) {
 // -----------------------------------------------------------------------
 void ScratchProject::skipValue(jsmntok_t* toks, int& i, int numToks) {
     if (i >= numToks) return;
-    // For objects/arrays we must skip all their children
     int type = toks[i].type;
     int size = toks[i].size;
     i++;
@@ -84,7 +100,6 @@ void ScratchProject::skipValue(jsmntok_t* toks, int& i, int numToks) {
             skipValue(toks, i, numToks);
         }
     }
-    // primitives and strings: already advanced by i++
 }
 
 // -----------------------------------------------------------------------
@@ -153,6 +168,7 @@ bool ScratchProject::parseJson(const char* json, size_t len) {
                     sprite.cloneParentIndex = -1;
                     sprite.layerOrder = 0;
                     parseTarget(json, toks, i, numToks, sprite);
+                    sprite.buildBlockIndex();
                     targets.push_back(std::move(sprite));
                 }
             } else {
@@ -216,6 +232,10 @@ void ScratchProject::parseCostumes(const char* json, jsmntok_t* toks,
     for (int c = 0; c < n && i < numToks; c++) {
         ScratchCostume costume{};
         costume.bitmapResolution = 1;
+        costume.gfxPtr = nullptr;
+        costume.palSlot = -1;
+        costume.width = costume.height = 0;
+        costume.isBackdrop = false;
         if (i >= numToks || toks[i].type != JSMN_OBJECT) {
             skipValue(toks, i, numToks); continue;
         }
@@ -249,6 +269,12 @@ void ScratchProject::parseSounds(const char* json, jsmntok_t* toks,
     for (int s = 0; s < n && i < numToks; s++) {
         ScratchSound sound{};
         sound.rate = 44100;
+        sound.loaded = false;
+        sound.isStreamed = false;
+        sound.pcmData = nullptr;
+        sound.pcmSize = 0;
+        sound.mmSoundId = 0;
+        sound.sampleCount = 0;
         if (i >= numToks || toks[i].type != JSMN_OBJECT) {
             skipValue(toks, i, numToks); continue;
         }
@@ -269,6 +295,7 @@ void ScratchProject::parseSounds(const char* json, jsmntok_t* toks,
 
 // -----------------------------------------------------------------------
 // Parse blocks object  (id -> ScratchBlock)
+// Uses flat arrays for inputs/fields as per optimized project.h
 // -----------------------------------------------------------------------
 void ScratchProject::parseBlocks(const char* json, jsmntok_t* toks,
                                   int& i, int numToks,
@@ -277,70 +304,106 @@ void ScratchProject::parseBlocks(const char* json, jsmntok_t* toks,
         skipValue(toks, i, numToks); return;
     }
     int n = toks[i].size; i++;
+    blocks.reserve(n < MAX_BLOCKS ? n : MAX_BLOCKS);
     for (int b = 0; b < n && i < numToks; b++) {
-        std::string blockId = jsmnStr(json, &toks[i]); i++;
+        // Parse block ID into fixed buffer
+        char blockId[MAX_BLOCK_ID + 1];
+        jsmnStrCopy(json, &toks[i], blockId, MAX_BLOCK_ID + 1);
+        i++;
+
         if (i >= numToks || toks[i].type != JSMN_OBJECT) {
             skipValue(toks, i, numToks); continue;
         }
+
         ScratchBlock block;
-        block.id = blockId;
+        strncpy(block.id, blockId, MAX_BLOCK_ID);
+        block.id[MAX_BLOCK_ID] = '\0';
+        block.opcode = BlockOpcode::UNKNOWN;
+        block.parentId[0] = '\0';
+        block.nextId[0] = '\0';
         block.topLevel = false;
         block.shadow   = false;
+        block.numInputs = 0;
+        block.numFields = 0;
+
         int nk = toks[i].size; i++;
         for (int k = 0; k < nk && i < numToks; k++) {
             std::string key = jsmnStr(json, &toks[i]); i++;
             if (i >= numToks) break;
+
             if (key == "opcode") {
-                block.opcodeStr = jsmnStr(json, &toks[i]);
-                block.opcode    = opcodeFromStr(block.opcodeStr);
+                // Resolve opcode from the raw string
+                int slen = toks[i].end - toks[i].start;
+                const char* sptr = json + toks[i].start;
+                block.opcode = opcodeFromStr(sptr, slen);
                 i++;
             } else if (key == "next") {
-                // next can be null or string
                 if (toks[i].type == JSMN_STRING)
-                    block.nextId = jsmnStr(json, &toks[i]);
+                    jsmnStrCopy(json, &toks[i], block.nextId, MAX_BLOCK_ID + 1);
+                else
+                    block.nextId[0] = '\0';
                 i++;
             } else if (key == "parent") {
                 if (toks[i].type == JSMN_STRING)
-                    block.parentId = jsmnStr(json, &toks[i]);
+                    jsmnStrCopy(json, &toks[i], block.parentId, MAX_BLOCK_ID + 1);
+                else
+                    block.parentId[0] = '\0';
                 i++;
             } else if (key == "topLevel") {
                 block.topLevel = jsmnBool(json, &toks[i]); i++;
             } else if (key == "shadow") {
                 block.shadow = jsmnBool(json, &toks[i]); i++;
             } else if (key == "inputs") {
-                parseBlockInputs(json, toks, i, numToks, block.inputs);
+                parseBlockInputs(json, toks, i, numToks, block);
             } else if (key == "fields") {
-                parseBlockFields(json, toks, i, numToks, block.fields);
+                parseBlockFields(json, toks, i, numToks, block);
             } else {
                 skipValue(toks, i, numToks);
             }
         }
-        blocks.push_back(std::move(block));
+        if ((int)blocks.size() < MAX_BLOCKS)
+            blocks.push_back(std::move(block));
     }
 }
 
 // -----------------------------------------------------------------------
-// Parse block inputs object
+// Parse block inputs object — stores into block.inputs[] flat array
 // -----------------------------------------------------------------------
 void ScratchProject::parseBlockInputs(const char* json, jsmntok_t* toks,
                                        int& i, int numToks,
-                                       std::map<std::string, ScratchInput>& inputs) {
+                                       ScratchBlock& block) {
     if (i >= numToks || toks[i].type != JSMN_OBJECT) {
         skipValue(toks, i, numToks); return;
     }
     int n = toks[i].size; i++;
     for (int k = 0; k < n && i < numToks; k++) {
-        std::string inputName = jsmnStr(json, &toks[i]); i++;
+        // Input slot name (e.g. "NUM1", "SUBSTACK", "CONDITION")
+        char inputName[16];
+        jsmnStrCopy(json, &toks[i], inputName, 16);
+        i++;
+
         ScratchInput inp{};
-        // Input value is an array: [shadowType, value_or_blockId]
+        strncpy(inp.key, inputName, 15);
+        inp.key[15] = '\0';
+        inp.isShadow = false;
+        inp.valueType = 0;
+        inp.numValue = 0.0;
+        inp.blockId[0] = '\0';
+
+        // Input value: array [shadowType, value_or_blockId, ...]
         if (i < numToks && toks[i].type == JSMN_ARRAY) {
             int arrSz = toks[i].size; i++;
-            // element 0: shadow int
-            if (arrSz > 0 && i < numToks) { i++; } // skip shadow indicator
-            // element 1: block ID string or literal value array
+            // element 0: shadow indicator (int)
+            if (arrSz > 0 && i < numToks) {
+                inp.isShadow = (toks[i].type == JSMN_PRIMITIVE &&
+                                json[toks[i].start] == '1');
+                i++;
+            }
+            // element 1: block ID string or literal value array or null
             if (arrSz > 1 && i < numToks) {
                 if (toks[i].type == JSMN_STRING) {
-                    inp.blockId = jsmnStr(json, &toks[i]); i++;
+                    jsmnStrCopy(json, &toks[i], inp.blockId, MAX_BLOCK_ID + 1);
+                    i++;
                 } else if (toks[i].type == JSMN_ARRAY) {
                     int valSz = toks[i].size; i++;
                     if (valSz >= 1 && i < numToks) {
@@ -366,35 +429,53 @@ void ScratchProject::parseBlockInputs(const char* json, jsmntok_t* toks,
         } else {
             skipValue(toks, i, numToks);
         }
-        inputs[inputName] = inp;
+
+        // Add to flat inputs array if space available
+        if (block.numInputs < MAX_INPUTS) {
+            block.inputs[block.numInputs++] = inp;
+        }
     }
 }
 
 // -----------------------------------------------------------------------
-// Parse block fields object
+// Parse block fields object — stores into block.fields[] flat array
 // -----------------------------------------------------------------------
 void ScratchProject::parseBlockFields(const char* json, jsmntok_t* toks,
                                        int& i, int numToks,
-                                       std::map<std::string, std::string>& fields) {
+                                       ScratchBlock& block) {
     if (i >= numToks || toks[i].type != JSMN_OBJECT) {
         skipValue(toks, i, numToks); return;
     }
     int n = toks[i].size; i++;
     for (int k = 0; k < n && i < numToks; k++) {
-        std::string fieldName = jsmnStr(json, &toks[i]); i++;
-        std::string fieldVal;
+        char fieldName[16];
+        jsmnStrCopy(json, &toks[i], fieldName, 16);
+        i++;
+
+        char fieldVal[MAX_VAR_NAME + 1];
+        fieldVal[0] = '\0';
+
         // Field value is an array: [value, id_or_null]
         if (i < numToks && toks[i].type == JSMN_ARRAY) {
             int sz = toks[i].size; i++;
             if (sz > 0 && i < numToks) {
-                fieldVal = jsmnStr(json, &toks[i]); i++;
+                jsmnStrCopy(json, &toks[i], fieldVal, MAX_VAR_NAME + 1);
+                i++;
             }
             for (int v = 1; v < sz && i < numToks; v++)
                 skipValue(toks, i, numToks);
         } else {
             skipValue(toks, i, numToks);
         }
-        fields[fieldName] = fieldVal;
+
+        // Add to flat fields array if space available
+        if (block.numFields < MAX_FIELDS) {
+            ScratchBlock::Field& f = block.fields[block.numFields++];
+            strncpy(f.key, fieldName, 15);
+            f.key[15] = '\0';
+            strncpy(f.value, fieldVal, MAX_VAR_NAME);
+            f.value[MAX_VAR_NAME] = '\0';
+        }
     }
 }
 
@@ -409,14 +490,25 @@ void ScratchProject::parseVariables(const char* json, jsmntok_t* toks,
     }
     int n = toks[i].size; i++;
     for (int k = 0; k < n && i < numToks; k++) {
-        std::string varId = jsmnStr(json, &toks[i]); i++;
+        // Variable ID into fixed buffer
         ScratchVariable var{};
-        var.id = varId;
+        var.isCloud = false;
+        var.visible = false;
+
+        jsmnStrCopy(json, &toks[i], var.id, MAX_BLOCK_ID + 1);
+        i++;
+
         // Variable value is an array: [name, value, optional:isCloud]
         if (i < numToks && toks[i].type == JSMN_ARRAY) {
             int sz = toks[i].size; i++;
-            if (sz > 0 && i < numToks) { var.name  = jsmnStr(json, &toks[i]); i++; }
-            if (sz > 1 && i < numToks) { var.value = jsmnStr(json, &toks[i]); i++; }
+            if (sz > 0 && i < numToks) {
+                jsmnStrCopy(json, &toks[i], var.name, MAX_VAR_NAME + 1);
+                i++;
+            }
+            if (sz > 1 && i < numToks) {
+                var.value = jsmnStr(json, &toks[i]);
+                i++;
+            }
             for (int v = 2; v < sz && i < numToks; v++)
                 skipValue(toks, i, numToks);
         } else {
@@ -424,6 +516,28 @@ void ScratchProject::parseVariables(const char* json, jsmntok_t* toks,
         }
         vars.push_back(var);
     }
+}
+
+// -----------------------------------------------------------------------
+// ScratchSprite::buildBlockIndex
+// Build a sorted index for O(log n) block lookup by ID.
+// Called once after all blocks are parsed.
+// -----------------------------------------------------------------------
+void ScratchSprite::buildBlockIndex() {
+    blockIndex.clear();
+    blockIndex.reserve(blocks.size());
+    for (int idx = 0; idx < (int)blocks.size(); idx++) {
+        IdxEntry e;
+        strncpy(e.id, blocks[idx].id, MAX_BLOCK_ID);
+        e.id[MAX_BLOCK_ID] = '\0';
+        e.blockIdx = (uint16_t)idx;
+        blockIndex.push_back(e);
+    }
+    // Sort by ID string for binary search
+    std::sort(blockIndex.begin(), blockIndex.end(),
+              [](const IdxEntry& a, const IdxEntry& b) {
+                  return __builtin_strcmp(a.id, b.id) < 0;
+              });
 }
 
 // -----------------------------------------------------------------------
@@ -438,86 +552,113 @@ ScratchSprite* ScratchProject::findSprite(const std::string& name) {
 
 // -----------------------------------------------------------------------
 // Opcode string -> enum
+// Takes (const char* s, int len) to avoid std::string construction at parse time
 // -----------------------------------------------------------------------
-BlockOpcode ScratchProject::opcodeFromStr(const std::string& s) {
-    static const struct { const char* str; BlockOpcode op; } map[] = {
-        {"event_whenflagclicked",       BlockOpcode::EVENT_WHENFLAGCLICKED},
-        {"event_whenkeypressed",        BlockOpcode::EVENT_WHENKEYPRESSED},
-        {"event_whenthisspriteclicked", BlockOpcode::EVENT_WHENTHISSPRITECLICKED},
-        {"event_whenbroadcastreceived", BlockOpcode::EVENT_WHENBROADCASTRECEIVED},
-        {"motion_movesteps",            BlockOpcode::MOTION_MOVESTEPS},
-        {"motion_turnright",            BlockOpcode::MOTION_TURNRIGHT},
-        {"motion_turnleft",             BlockOpcode::MOTION_TURNLEFT},
-        {"motion_gotoxy",               BlockOpcode::MOTION_GOTOXY},
-        {"motion_glideto",              BlockOpcode::MOTION_GLIDETO},
-        {"motion_setx",                 BlockOpcode::MOTION_SETX},
-        {"motion_sety",                 BlockOpcode::MOTION_SETY},
-        {"motion_changexby",            BlockOpcode::MOTION_CHANGEXBY},
-        {"motion_changeyby",            BlockOpcode::MOTION_CHANGEYBY},
-        {"motion_ifonedgebounce",       BlockOpcode::MOTION_IFONEDGEBOUNCE},
-        {"looks_sayforsecs",            BlockOpcode::LOOKS_SAYFORSECS},
-        {"looks_say",                   BlockOpcode::LOOKS_SAY},
-        {"looks_switchcostumeto",       BlockOpcode::LOOKS_SWITCHCOSTUMETO},
-        {"looks_nextcostume",           BlockOpcode::LOOKS_NEXTCOSTUME},
-        {"looks_switchbackdropto",      BlockOpcode::LOOKS_SWITCHBACKDROPTO},
-        {"looks_changesizeby",          BlockOpcode::LOOKS_CHANGESIZEBY},
-        {"looks_setsizeto",             BlockOpcode::LOOKS_SETSIZETO},
-        {"looks_show",                  BlockOpcode::LOOKS_SHOW},
-        {"looks_hide",                  BlockOpcode::LOOKS_HIDE},
-        {"sound_playuntildone",         BlockOpcode::SOUND_PLAYUNTILDONE},
-        {"sound_play",                  BlockOpcode::SOUND_PLAY},
-        {"sound_stopallsounds",         BlockOpcode::SOUND_STOPALLSOUNDS},
-        {"control_wait",                BlockOpcode::CONTROL_WAIT},
-        {"control_repeat",              BlockOpcode::CONTROL_REPEAT},
-        {"control_forever",             BlockOpcode::CONTROL_FOREVER},
-        {"control_if",                  BlockOpcode::CONTROL_IF},
-        {"control_if_else",             BlockOpcode::CONTROL_IF_ELSE},
-        {"control_wait_until",          BlockOpcode::CONTROL_WAIT_UNTIL},
-        {"control_repeat_until",        BlockOpcode::CONTROL_REPEAT_UNTIL},
-        {"control_stop",                BlockOpcode::CONTROL_STOP},
-        {"control_start_as_clone",      BlockOpcode::CONTROL_START_AS_CLONE},
-        {"control_create_clone_of",     BlockOpcode::CONTROL_CREATE_CLONE_OF},
-        {"control_delete_this_clone",   BlockOpcode::CONTROL_DELETE_THIS_CLONE},
-        {"sensing_touchingobject",      BlockOpcode::SENSING_TOUCHINGOBJECT},
-        {"sensing_keypressed",          BlockOpcode::SENSING_KEYPRESSED},
-        {"sensing_mousedown",           BlockOpcode::SENSING_MOUSEDOWN},
-        {"sensing_mousex",              BlockOpcode::SENSING_MOUSEX},
-        {"sensing_mousey",              BlockOpcode::SENSING_MOUSEY},
-        {"sensing_timer",               BlockOpcode::SENSING_TIMER},
-        {"sensing_resettimer",          BlockOpcode::SENSING_RESETTIMER},
-        {"sensing_loudness",            BlockOpcode::SENSING_LOUDNESS},
-        {"sensing_askandwait",          BlockOpcode::SENSING_ASKANDWAIT},
-        {"operator_add",                BlockOpcode::OPERATOR_ADD},
-        {"operator_subtract",           BlockOpcode::OPERATOR_SUBTRACT},
-        {"operator_multiply",           BlockOpcode::OPERATOR_MULTIPLY},
-        {"operator_divide",             BlockOpcode::OPERATOR_DIVIDE},
-        {"operator_random",             BlockOpcode::OPERATOR_RANDOM},
-        {"operator_gt",                 BlockOpcode::OPERATOR_GT},
-        {"operator_lt",                 BlockOpcode::OPERATOR_LT},
-        {"operator_equals",             BlockOpcode::OPERATOR_EQUALS},
-        {"operator_and",                BlockOpcode::OPERATOR_AND},
-        {"operator_or",                 BlockOpcode::OPERATOR_OR},
-        {"operator_not",                BlockOpcode::OPERATOR_NOT},
-        {"operator_join",               BlockOpcode::OPERATOR_JOIN},
-        {"operator_mod",                BlockOpcode::OPERATOR_MOD},
-        {"operator_round",              BlockOpcode::OPERATOR_ROUND},
-        {"operator_mathop",             BlockOpcode::OPERATOR_MATHOP},
-        {"data_setvariableto",          BlockOpcode::DATA_SETVARIABLETO},
-        {"data_changevariableby",       BlockOpcode::DATA_CHANGEVARIABLEBY},
-        {"nds_buttonpressed",           BlockOpcode::NDS_BUTTONPRESSED},
-        {"nds_buttonheld",              BlockOpcode::NDS_BUTTONHELD},
-        {"nds_buttonreleased",          BlockOpcode::NDS_BUTTONRELEASED},
-        {"nds_touchx",                  BlockOpcode::NDS_TOUCHX},
-        {"nds_touchy",                  BlockOpcode::NDS_TOUCHY},
-        {"nds_touchpressed",            BlockOpcode::NDS_TOUCHPRESSED},
-        {"nds_microphone_loudness",     BlockOpcode::NDS_MICROPHONE_LOUDNESS},
-        {"nds_rumble",                  BlockOpcode::NDS_RUMBLE},
-        {"nds_setvibration",            BlockOpcode::NDS_SETVIBRATION},
-        {"nds_backlight_top",           BlockOpcode::NDS_BACKLIGHT_TOP},
-        {"nds_backlight_bottom",        BlockOpcode::NDS_BACKLIGHT_BOTTOM},
-    };
-    for (auto& m : map) {
-        if (s == m.str) return m.op;
-    }
+BlockOpcode ScratchProject::opcodeFromStr(const char* s, int len) {
+    // Use a macro to compare without constructing std::string
+#define OP(str, code) \
+    if (len == (int)(sizeof(str)-1) && strncmp(s, str, len) == 0) return BlockOpcode::code;
+
+    OP("event_whenflagclicked",       EVENT_WHENFLAGCLICKED)
+    OP("event_whenkeypressed",        EVENT_WHENKEYPRESSED)
+    OP("event_whenthisspriteclicked", EVENT_WHENTHISSPRITECLICKED)
+    OP("event_whenbroadcastreceived", EVENT_WHENBROADCASTRECEIVED)
+    OP("motion_movesteps",            MOTION_MOVESTEPS)
+    OP("motion_turnright",            MOTION_TURNRIGHT)
+    OP("motion_turnleft",             MOTION_TURNLEFT)
+    OP("motion_gotoxy",               MOTION_GOTOXY)
+    OP("motion_glideto",              MOTION_GLIDETO)
+    OP("motion_setx",                 MOTION_SETX)
+    OP("motion_sety",                 MOTION_SETY)
+    OP("motion_changexby",            MOTION_CHANGEXBY)
+    OP("motion_changeyby",            MOTION_CHANGEYBY)
+    OP("motion_ifonedgebounce",       MOTION_IFONEDGEBOUNCE)
+    OP("motion_setrotationstyle",     MOTION_SETROTATIONSTYLE)
+    OP("motion_xposition",            MOTION_XPOSITION)
+    OP("motion_yposition",            MOTION_YPOSITION)
+    OP("motion_direction",            MOTION_DIRECTION)
+    OP("looks_sayforsecs",            LOOKS_SAYFORSECS)
+    OP("looks_say",                   LOOKS_SAY)
+    OP("looks_switchcostumeto",       LOOKS_SWITCHCOSTUMETO)
+    OP("looks_nextcostume",           LOOKS_NEXTCOSTUME)
+    OP("looks_switchbackdropto",      LOOKS_SWITCHBACKDROPTO)
+    OP("looks_changesizeby",          LOOKS_CHANGESIZEBY)
+    OP("looks_setsizeto",             LOOKS_SETSIZETO)
+    OP("looks_show",                  LOOKS_SHOW)
+    OP("looks_hide",                  LOOKS_HIDE)
+    OP("looks_seteffectto",           LOOKS_SETEFFECTTO)
+    OP("looks_changeeffectby",        LOOKS_CHANGEEFFECTBY)
+    OP("sound_playuntildone",         SOUND_PLAYUNTILDONE)
+    OP("sound_play",                  SOUND_PLAY)
+    OP("sound_stopallsounds",         SOUND_STOPALLSOUNDS)
+    OP("sound_changevolumeby",        SOUND_CHANGEVOLUMEBY)
+    OP("sound_setvolumeto",           SOUND_SETVOLUMETO)
+    OP("control_wait",                CONTROL_WAIT)
+    OP("control_repeat",              CONTROL_REPEAT)
+    OP("control_forever",             CONTROL_FOREVER)
+    OP("control_if",                  CONTROL_IF)
+    OP("control_if_else",             CONTROL_IF_ELSE)
+    OP("control_wait_until",          CONTROL_WAIT_UNTIL)
+    OP("control_repeat_until",        CONTROL_REPEAT_UNTIL)
+    OP("control_stop",                CONTROL_STOP)
+    OP("control_start_as_clone",      CONTROL_START_AS_CLONE)
+    OP("control_create_clone_of",     CONTROL_CREATE_CLONE_OF)
+    OP("control_delete_this_clone",   CONTROL_DELETE_THIS_CLONE)
+    OP("sensing_touchingobject",      SENSING_TOUCHINGOBJECT)
+    OP("sensing_keypressed",          SENSING_KEYPRESSED)
+    OP("sensing_mousedown",           SENSING_MOUSEDOWN)
+    OP("sensing_mousex",              SENSING_MOUSEX)
+    OP("sensing_mousey",              SENSING_MOUSEY)
+    OP("sensing_timer",               SENSING_TIMER)
+    OP("sensing_resettimer",          SENSING_RESETTIMER)
+    OP("sensing_loudness",            SENSING_LOUDNESS)
+    OP("sensing_askandwait",          SENSING_ASKANDWAIT)
+    OP("sensing_of",                  SENSING_OF)
+    OP("sensing_distanceto",          SENSING_DISTANCETO)
+    OP("operator_add",                OPERATOR_ADD)
+    OP("operator_subtract",           OPERATOR_SUBTRACT)
+    OP("operator_multiply",           OPERATOR_MULTIPLY)
+    OP("operator_divide",             OPERATOR_DIVIDE)
+    OP("operator_random",             OPERATOR_RANDOM)
+    OP("operator_gt",                 OPERATOR_GT)
+    OP("operator_lt",                 OPERATOR_LT)
+    OP("operator_equals",             OPERATOR_EQUALS)
+    OP("operator_and",                OPERATOR_AND)
+    OP("operator_or",                 OPERATOR_OR)
+    OP("operator_not",                OPERATOR_NOT)
+    OP("operator_join",               OPERATOR_JOIN)
+    OP("operator_letter_of",          OPERATOR_LETTER_OF)
+    OP("operator_length",             OPERATOR_LENGTH)
+    OP("operator_mod",                OPERATOR_MOD)
+    OP("operator_round",              OPERATOR_ROUND)
+    OP("operator_mathop",             OPERATOR_MATHOP)
+    OP("data_setvariableto",          DATA_SETVARIABLETO)
+    OP("data_changevariableby",       DATA_CHANGEVARIABLEBY)
+    OP("data_showvariable",           DATA_SHOWVARIABLE)
+    OP("data_hidevariable",           DATA_HIDEVARIABLE)
+    OP("data_addtolist",              DATA_ADDTOLIST)
+    OP("data_deleteoflist",           DATA_DELETEOFLIST)
+    OP("data_insertatlist",           DATA_INSERTATLIST)
+    OP("data_replaceitemoflist",      DATA_REPLACEITEMOFLIST)
+    OP("data_itemoflist",             DATA_ITEMOFLIST)
+    OP("data_itemnumoflist",          DATA_ITEMNUMOFLIST)
+    OP("data_lengthoflist",           DATA_LENGTHOFLIST)
+    OP("data_listcontainsitem",       DATA_LISTCONTAINSITEM)
+    OP("data_showlist",               DATA_SHOWLIST)
+    OP("data_hidelist",               DATA_HIDELIST)
+    OP("nds_buttonpressed",           NDS_BUTTONPRESSED)
+    OP("nds_buttonheld",              NDS_BUTTONHELD)
+    OP("nds_buttonreleased",          NDS_BUTTONRELEASED)
+    OP("nds_touchx",                  NDS_TOUCHX)
+    OP("nds_touchy",                  NDS_TOUCHY)
+    OP("nds_touchpressed",            NDS_TOUCHPRESSED)
+    OP("nds_microphone_loudness",     NDS_MICROPHONE_LOUDNESS)
+    OP("nds_microphone_recording",    NDS_MICROPHONE_RECORDING)
+    OP("nds_rumble",                  NDS_RUMBLE)
+    OP("nds_setvibration",            NDS_SETVIBRATION)
+    OP("nds_backlight_top",           NDS_BACKLIGHT_TOP)
+    OP("nds_backlight_bottom",        NDS_BACKLIGHT_BOTTOM)
+
+#undef OP
     return BlockOpcode::UNKNOWN;
 }
