@@ -568,10 +568,10 @@ void Renderer::renderFrame(ScratchProject& project) {
         oamWritten++;
     }
 
-    // Hide any OAM slots that were used last frame but not this frame
+    // Hide slots used last frame but not this frame
     for (int i = oamWritten; i < lastOamCount; i++) {
         if (s_oamCacheValid && s_oamCache[i].visible) {
-            oamSetHidden(&oamMain, i, SpriteSize_8x8, SpriteColorFormat_256Color);
+            oamClearSprite(&oamMain, i);
             s_oamCache[i].visible = false;
         }
     }
