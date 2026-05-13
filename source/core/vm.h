@@ -191,7 +191,7 @@ private:
 
     void         executeThread(ScriptThread& thread, double dt);
 
-    ScratchValue ScratchVM::executeBlock(ScriptThread& thread,
+    ScratchValue executeBlock(ScriptThread& thread,
                                           const std::string& blockId,
                                           bool& yielded) {
         yielded = false;
