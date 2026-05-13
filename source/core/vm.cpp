@@ -349,35 +349,7 @@ void ScratchVM::executeThread(ScriptThread& thread, double /*dt*/) {
 // Execute one block
 // ═══════════════════════════════════════════════════════════════════════════════
 
-ScratchValue ScratchVM::executeBlock(ScriptThread& thread,
-                                      const std::string& blockId,
-                                      bool& yielded) {
-    yielded = false;
-    ScratchBlock* b = getBlock(thread, blockId);
-    if (!b) { thread.state = ScriptThread::DONE; return ScratchValue(); }
-
-    // Dispatch by category prefix for speed
-    BlockOpcode op = b->opcode;
-
-    if (op >= BlockOpcode::MOTION_MOVESTEPS && op <= BlockOpcode::MOTION_DIRECTION)
-        return execMotion(thread, b, yielded);
-    if (op >= BlockOpcode::LOOKS_SAYFORSECS && op <= BlockOpcode::LOOKS_CHANGEEFFECTBY)
-        return execLooks(thread, b, yielded);
-    if (op >= BlockOpcode::SOUND_PLAYUNTILDONE && op <= BlockOpcode::SOUND_SETVOLUMETO)
-        return execSound(thread, b, yielded);
-    if (op >= BlockOpcode::CONTROL_WAIT && op <= BlockOpcode::CONTROL_DELETE_THIS_CLONE)
-        return execControl(thread, b, yielded);
-    if (op >= BlockOpcode::SENSING_TOUCHINGOBJECT && op <= BlockOpcode::SENSING_ASKANDWAIT)
-        return execSensing(thread, b, yielded);
-    if (op >= BlockOpcode::DATA_SETVARIABLETO && op <= BlockOpcode::DATA_HIDELIST)
-        return execData(thread, b, yielded);
-    if (op >= BlockOpcode::OPERATOR_ADD && op <= BlockOpcode::OPERATOR_MATHOP)
-        return execOperator(thread, b, yielded);
-    if (op >= BlockOpcode::NDS_BUTTONPRESSED)
-        return execNDS(thread, b, yielded);
-
-    return ScratchValue();
-}
+//in header
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Motion
