@@ -189,8 +189,10 @@ void ScratchVM::startHatBlocks(BlockOpcode hat, ScratchSprite* sprite,
     }
 }
 
-int ScratchVM::startHatBlocksCount(BlockOpcode hat, ScratchSprite* sprite,
-                                    const char* field) {
+int ScratchVM::startHatBlocksCount(
+                        BlockOpcode hat,
+                        ScratchSprite* sprite,
+                        const char* field) {
     int before = (int)pendingThreads.size();
     startHatBlocks(hat, sprite, field);
     return (int)pendingThreads.size() - before;
@@ -1081,8 +1083,8 @@ ScratchValue ScratchVM::evaluateInput(ScriptThread& thread, const ScratchInput& 
 }
 
 ScratchValue ScratchVM::evaluateReporter(
-                            ScriptThread& thread,
-                            const std::string& blockId) {
+                        ScriptThread& thread,
+                        const char* blockId) {
     bool yielded = false;
     ScriptThread::State saved = thread.state;
     thread.state = ScriptThread::RUNNING;
@@ -1187,8 +1189,9 @@ void ScratchVM::setVariable(ScratchSprite* sprite, const std::string& name,
 // List access
 // ═══════════════════════════════════════════════════════════════════════════════
 
-ScratchRuntimeList* ScratchVM::getList(ScratchSprite* sprite,
-                                        const std::string& name) {
+ScratchRuntimeList* ScratchVM::getList(
+                        ScratchSprite* sprite,
+                        const char* name) {
     // Search sprite-local first
     for (auto& e : runtimeLists)
         if (e.owner == sprite && e.list.name == name) return &e.list;
