@@ -162,7 +162,7 @@ void ScratchVM::greenFlag() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void ScratchVM::startHatBlocks(BlockOpcode hat, ScratchSprite* sprite,
-                                const std::string& field) {
+                                const char* field) {
     for (auto& b : sprite->blocks) {
         if (!b.topLevel || b.opcode != hat) continue;
         if (hat == BlockOpcode::EVENT_WHENKEYPRESSED) {
@@ -631,7 +631,7 @@ ScratchValue ScratchVM::execControl(ScriptThread& t, ScratchBlock* b, bool& yiel
                 strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]= '\0';
                 fr.remaining     = 1;
                 t.callStack.push_back(fr);
-                strncpy(t.currentBlockId, b->inputs.at(key).blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]= '\0';
+                strncpy(t.currentBlockId, inputGet(b, key).blockId, MAX_BLOCK_ID); t.currentBlockId[MAX_BLOCK_ID]= '\0';
                 yielded = true;
             }
             break;
@@ -642,8 +642,14 @@ ScratchValue ScratchVM::execControl(ScriptThread& t, ScratchBlock* b, bool& yiel
             if (!cond) {
                 StackFrame fr;
                 fr.isWaitUntil = true;
-                fr.condBlockId = inputHas(b, "CONDITION")
-                                 ? inputGet(b,"CONDITION").blockId : "";
+                if (inputHas(b, "CONDITION")) {
+                    strncpy(fr.condBlockId,
+                            inputGet(b, "CONDITION").blockId,
+                            MAX_BLOCK_ID);
+                    fr.condBlockId[MAX_BLOCK_ID] = '\0';
+                } else {
+                    fr.condBlockId[0] = '\0';
+                }
                 strncpy(fr.loopBlockId, b->id, MAX_BLOCK_ID); fr.loopBlockId[MAX_BLOCK_ID]= '\0';
                 strncpy(fr.returnBlockId, b->nextId, MAX_BLOCK_ID); fr.returnBlockId[MAX_BLOCK_ID]= '\0';
                 fr.remaining = -1;
@@ -1077,7 +1083,7 @@ ScratchValue ScratchVM::execNDS(ScriptThread& t, ScratchBlock* b, bool& yielded)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 ScratchValue ScratchVM::evaluateInput(ScriptThread& thread, const ScratchInput& input) {
-    if (!input.blockId.empty())
+    if (input.blockId[0] != '\0')
         return evaluateReporter(thread, input.blockId);
     // valueType 4–8 are numeric literals in Scratch JSON
     if (input.valueType >= 4 && input.valueType <= 8)
