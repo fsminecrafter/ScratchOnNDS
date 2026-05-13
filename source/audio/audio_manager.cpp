@@ -19,6 +19,7 @@
 // =============================================================================
 #include "audio_manager.h"
 #include <nds.h>
+#include <maxmod9.h>
 #ifndef FIFO_MAXMOD
 #define FIFO_MAXMOD 7
 #endif
