@@ -1254,8 +1254,9 @@ void ScratchVM::deleteClone(ScratchSprite* sprite) {
 // Sprite property (for sensing_of)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-ScratchValue ScratchVM::getSpriteProperty(ScratchSprite* s,
-                                           const std::string& prop) {
+ScratchValue ScratchVM::getSpriteProperty(
+                        ScratchSprite* s,
+                        const char* prop) {
     if (prop == "x position")     return ScratchValue(s->x);
     if (prop == "y position")     return ScratchValue(s->y);
     if (prop == "direction")      return ScratchValue((double)s->direction);
