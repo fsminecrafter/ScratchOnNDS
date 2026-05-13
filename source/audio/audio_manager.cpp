@@ -249,20 +249,20 @@ mm_word AudioManager::streamCallback(mm_word length, mm_addr dest,
 // Now we walk the active list and compact out handles for sounds that
 // have completed. mmEffectActive() returns false when a sound is done.
 // -----------------------------------------------------------------------
-void AudioManager::update() {
-    if (streamActive) mmStreamUpdate();
-
-    // Compact active handle list: remove finished handles
-    int newCount = 0;
-    for (int i = 0; i < numActive; i++) {
-        if (mmEffectActive(activeHandles[i])) {
-            // Still playing — keep in list
-            activeHandles[newCount++] = activeHandles[i];
+void AudioManager::update()
+{
+    for (int i = 0; i < activeHandleCount; )
+    {
+        if (mmEffectStatus(activeHandles[i]) != MM_ACTIVE)
+        {
+            // remove by swap-back
+            activeHandles[i] = activeHandles[--activeHandleCount];
         }
-        // If not active, it has already finished — no need to release
-        // (maxmod frees the channel automatically when the sound ends)
+        else
+        {
+            i++;
+        }
     }
-    numActive = newCount;
 }
 
 // -----------------------------------------------------------------------
