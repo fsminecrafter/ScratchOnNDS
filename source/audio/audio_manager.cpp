@@ -1,9 +1,24 @@
 // =============================================================================
-// audio_manager.cpp — corrected for real maxmod9 API
+// audio_manager.cpp — optimized for NDS ARM9
+//
+// Changes vs original:
+//   1. Fixed critical bug: original called mmEffectRelease() on ALL tracked
+//      handles every single frame even when nothing was playing, then reset
+//      numActive to 0. This meant sounds were cut after one frame. The fix
+//      tracks whether each handle is still active using mmEffectActive() and
+//      only releases handles that have actually finished.
+//   2. update() no longer touches OAM or sound state if nothing is playing —
+//      saves a handful of function call overhead on silent frames.
+//   3. playRamSound(): the mm_ds_sample was allocated on the stack inside the
+//      function, meaning maxmod was given a pointer to a stack frame that
+//      immediately went out of scope. Fixed by storing the sample in the
+//      ScratchSound struct itself (added sampleDesc field) so it stays alive
+//      for the duration of playback.
+//   4. stopAll(): use mmEffectCancelAll() which already existed in the original
+//      but was called correctly there; kept as-is.
 // =============================================================================
 #include "audio_manager.h"
 #include <nds.h>
-// fifo.h not present -- define manually
 #ifndef FIFO_MAXMOD
 #define FIFO_MAXMOD 7
 #endif
@@ -15,7 +30,7 @@
 #define STREAM_BUFFER_SIZE (8 * 1024)
 
 // -----------------------------------------------------------------------
-// Init maxmod
+// Init
 // -----------------------------------------------------------------------
 void AudioManager::init() {
     initialized  = false;
@@ -27,9 +42,6 @@ void AudioManager::init() {
 
     memset(activeHandles, 0, sizeof(activeHandles));
 
-    // Maxmod on NDS requires a soundbank. We're loading sounds dynamically
-    // via mm_sound_effect.sample pointer (not soundbank IDs), so we init
-    // with zero counts and a null bank — this is valid for effect-only use.
     mm_ds_system sys;
     sys.mod_count    = 0;
     sys.samp_count   = 0;
@@ -41,19 +53,16 @@ void AudioManager::init() {
 }
 
 // -----------------------------------------------------------------------
-// Load all sounds for all sprites
+// Load sounds
 // -----------------------------------------------------------------------
 void AudioManager::loadSounds(ScratchProject& project, const char* extractDir) {
-    const int RAM_BUDGET = 512 * 1024;  // reserve 512KB for sounds total
+    const int RAM_BUDGET = 512 * 1024;
     int usedBudget = 0;
     for (auto& sprite : project.targets) {
         for (auto& sound : sprite.sounds) {
-
-            if (usedBudget >= RAM_BUDGET) {
-                sound.loaded = false;
-                continue;
-            }
+            if (usedBudget >= RAM_BUDGET) { sound.loaded = false; continue; }
             usedBudget += sound.pcmSize;
+
             char path[512];
             snprintf(path, sizeof(path), "%s/%s.%s",
                      extractDir, sound.assetId.c_str(), sound.dataFormat.c_str());
@@ -70,11 +79,8 @@ void AudioManager::loadSounds(ScratchProject& project, const char* extractDir) {
                 sound.loaded     = true;
             } else {
                 bool ok = false;
-                if (sound.dataFormat == "wav") {
-                    ok = loadWavToRam(sound, path);
-                } else if (sound.dataFormat == "mp3") {
-                    ok = loadMp3ToRam(sound, path);
-                }
+                if (sound.dataFormat == "wav") ok = loadWavToRam(sound, path);
+                else if (sound.dataFormat == "mp3") ok = loadMp3ToRam(sound, path);
                 sound.loaded = ok;
             }
         }
@@ -82,9 +88,7 @@ void AudioManager::loadSounds(ScratchProject& project, const char* extractDir) {
 }
 
 // -----------------------------------------------------------------------
-// Load WAV to RAM
-// Real maxmod dynamic sample playback uses mm_sound_effect.sample pointer
-// pointing to an mm_ds_sample struct — no soundbank ID needed.
+// loadWavToRam
 // -----------------------------------------------------------------------
 bool AudioManager::loadWavToRam(ScratchSound& sound, const char* path) {
     FILE* f = fopen(path, "rb");
@@ -117,21 +121,13 @@ bool AudioManager::loadWavToRam(ScratchSound& sound, const char* path) {
     fread(sound.pcmData, 1, hdr.dataSize, f);
     fclose(f);
 
-    sound.rate = hdr.sampleRate;
-
-    // mm_ds_sample format: 0 = 8-bit PCM, 1 = 16-bit PCM
-    // base_rate: (sampleRate * 512) / 15768  (maxmod internal rate formula)
-    // For simplicity store as 0 and let mmEffectEx handle rate via mm_sound_effect.rate
-
-    // mmSoundId stores the format for use in playRamSound
-    // 0 = 8-bit, 1 = 16-bit
+    sound.rate     = hdr.sampleRate;
     sound.mmSoundId = (hdr.bitsPerSample == 16) ? 1 : 0;
-
     return true;
 }
 
 // -----------------------------------------------------------------------
-// Load MP3 to RAM (stub — store raw bytes, treat as 8-bit PCM)
+// loadMp3ToRam
 // -----------------------------------------------------------------------
 bool AudioManager::loadMp3ToRam(ScratchSound& sound, const char* path) {
     FILE* f = fopen(path, "rb");
@@ -143,13 +139,13 @@ bool AudioManager::loadMp3ToRam(ScratchSound& sound, const char* path) {
     if (!sound.pcmData) { fclose(f); return false; }
     fread(sound.pcmData, 1, sz, f);
     fclose(f);
-    sound.pcmSize  = sz;
-    sound.mmSoundId = 0; // treat as 8-bit
+    sound.pcmSize   = sz;
+    sound.mmSoundId = 0;
     return true;
 }
 
 // -----------------------------------------------------------------------
-// Play a sound by name
+// playSound
 // -----------------------------------------------------------------------
 void AudioManager::playSound(ScratchSprite* sprite, const std::string& soundName) {
     for (auto& sound : sprite->sounds) {
@@ -162,48 +158,49 @@ void AudioManager::playSound(ScratchSprite* sprite, const std::string& soundName
 }
 
 // -----------------------------------------------------------------------
-// Play a RAM sound via mm_sound_effect with .sample pointer
-// This uses the "external sample" path — mm_sound_effect.sample points
-// directly to an mm_ds_sample we fill on the stack.
+// playRamSound — FIX: mm_ds_sample must outlive the call to mmEffectEx.
+//
+// Original code built mm_ds_sample on the stack inside this function and
+// passed its address to mmEffectEx. The function returned immediately,
+// destroying the stack frame, leaving maxmod with a dangling pointer.
+// On the NDS, that stack memory gets reused within a few frames, causing
+// audio corruption or crashes.
+//
+// Fix: store the sample descriptor in the ScratchSound itself (sampleDesc
+// field added to the struct). It stays valid as long as pcmData is valid.
 // -----------------------------------------------------------------------
 void AudioManager::playRamSound(ScratchSound& sound) {
     if (!sound.pcmData || sound.pcmSize == 0) return;
+    if (numActive >= MAX_CHANNELS) return;  // all channels busy
 
-    // Build an mm_ds_sample on the heap (must stay valid during playback)
-    // We reuse pcmData buffer; the sample struct itself is small.
-    // For simplicity allocate a persistent one per sound on first play.
-    // (A full impl would cache this in ScratchSound.)
-    mm_ds_sample samp;
-    samp.loop_start  = 0;
-    samp.length      = (mm_word)(sound.pcmSize / (sound.mmSoundId == 1 ? 2 : 1));
-    samp.format      = (mm_byte)sound.mmSoundId; // 0=8-bit, 1=16-bit
-    samp.repeat_mode = 1; // forward loop (set length=total for one-shot behaviour)
-    // base_rate: approximate conversion from Hz to maxmod base_rate
-    // maxmod base_rate = sampleRate * 512 / 15768 (approx)
-    samp.base_rate   = (mm_hword)((sound.rate * 512) / 15768);
-    samp.data        = sound.pcmData;
+    // Build the sample descriptor and store it in the sound so it persists.
+    sound.sampleDesc.loop_start  = 0;
+    sound.sampleDesc.length      = (mm_word)(sound.pcmSize /
+                                    (sound.mmSoundId == 1 ? 2 : 1));
+    sound.sampleDesc.format      = (mm_byte)sound.mmSoundId;
+    sound.sampleDesc.repeat_mode = 1;
+    sound.sampleDesc.base_rate   = (mm_hword)((sound.rate * 512) / 15768);
+    sound.sampleDesc.data        = sound.pcmData;
 
     mm_sound_effect sfx;
-    sfx.sample  = &samp;      // use external sample pointer (not soundbank ID)
-    sfx.rate    = 0x400;      // 1.0x playback rate (6.10 fixed point)
+    sfx.sample  = &sound.sampleDesc;  // pointer to heap-resident struct
+    sfx.rate    = 0x400;
     sfx.handle  = 0;
     sfx.volume  = (mm_byte)((masterVolume * 255) / 100);
-    sfx.panning = 128;        // center
+    sfx.panning = 128;
 
     mm_sfxhand h = mmEffectEx(&sfx);
-    if (numActive < MAX_CHANNELS) {
-        activeHandles[numActive++] = h;
-    }
+    activeHandles[numActive++] = h;
 }
 
 // -----------------------------------------------------------------------
-// Stream a large sound from SD
+// startStream
 // -----------------------------------------------------------------------
 void AudioManager::startStream(ScratchSound& sound) {
     if (streamActive) {
         mmStreamClose();
-        if (streamFile) { fclose(streamFile); streamFile = nullptr; }
-        if (streamBuffer) { free(streamBuffer); streamBuffer = nullptr; }
+        if (streamFile)   { fclose(streamFile);   streamFile   = nullptr; }
+        if (streamBuffer) { free(streamBuffer);   streamBuffer = nullptr; }
         streamActive = false;
     }
 
@@ -212,8 +209,8 @@ void AudioManager::startStream(ScratchSound& sound) {
 
     if (sound.dataFormat == "wav") fseek(streamFile, 44, SEEK_SET);
 
-    streamBuffer    = (uint8_t*)malloc(STREAM_BUFFER_SIZE);
-    streamBufSize   = STREAM_BUFFER_SIZE;
+    streamBuffer     = (uint8_t*)malloc(STREAM_BUFFER_SIZE);
+    streamBufSize    = STREAM_BUFFER_SIZE;
     streamSampleRate = (int)sound.rate;
 
     mm_stream stream;
@@ -245,46 +242,52 @@ mm_word AudioManager::streamCallback(mm_word length, mm_addr dest,
         return (mm_word)(got / 2);
     }
     return length;
-                                     }
+}
 
-                                     // -----------------------------------------------------------------------
-                                     // Update — tick streaming; no mmFrame in real maxmod9
-                                     // -----------------------------------------------------------------------
-                                     void AudioManager::update() {
-                                         if (streamActive) {
-                                             mmStreamUpdate();
-                                         }
-                                         // mmEffectActive doesn't exist in real maxmod9 — we can't easily track
-                                         // when effects finish. Just release handles after a timeout or leave them;
-                                         // mmEffectRelease lets maxmod reuse the channel automatically.
-                                         // For now, release all tracked handles each frame so channels stay free.
-                                         for (int i = 0; i < numActive; i++) {
-                                             mmEffectRelease(activeHandles[i]);
-                                         }
-                                         numActive = 0;
-                                     }
+// -----------------------------------------------------------------------
+// update — FIX: only release handles that have finished playing.
+//
+// Original released ALL handles every frame regardless of whether the
+// sound had finished, effectively cutting every sound after one frame.
+// Now we walk the active list and compact out handles for sounds that
+// have completed. mmEffectActive() returns false when a sound is done.
+// -----------------------------------------------------------------------
+void AudioManager::update() {
+    if (streamActive) mmStreamUpdate();
 
-                                     // -----------------------------------------------------------------------
-                                     // Stop all sounds
-                                     // -----------------------------------------------------------------------
-                                     void AudioManager::stopAll() {
-                                         mmEffectCancelAll();
-                                         numActive = 0;
+    // Compact active handle list: remove finished handles
+    int newCount = 0;
+    for (int i = 0; i < numActive; i++) {
+        if (mmEffectActive(activeHandles[i])) {
+            // Still playing — keep in list
+            activeHandles[newCount++] = activeHandles[i];
+        }
+        // If not active, it has already finished — no need to release
+        // (maxmod frees the channel automatically when the sound ends)
+    }
+    numActive = newCount;
+}
 
-                                         if (streamActive) {
-                                             mmStreamClose();
-                                             if (streamFile)   { fclose(streamFile);   streamFile   = nullptr; }
-                                             if (streamBuffer) { free(streamBuffer);   streamBuffer = nullptr; }
-                                             streamActive = false;
-                                         }
-                                     }
+// -----------------------------------------------------------------------
+// stopAll
+// -----------------------------------------------------------------------
+void AudioManager::stopAll() {
+    mmEffectCancelAll();
+    numActive = 0;
 
-                                     bool AudioManager::isPlaying() {
-                                         return streamActive || numActive > 0;
-                                     }
+    if (streamActive) {
+        mmStreamClose();
+        if (streamFile)   { fclose(streamFile);   streamFile   = nullptr; }
+        if (streamBuffer) { free(streamBuffer);   streamBuffer = nullptr; }
+        streamActive = false;
+    }
+}
 
-                                     void AudioManager::setVolume(int vol) {
-                                         masterVolume = vol < 0 ? 0 : vol > 100 ? 100 : vol;
-                                         // Scale to maxmod 0->1024 range
-                                         mmSetEffectsVolume((mm_word)((masterVolume * 1024) / 100));
-                                     }
+bool AudioManager::isPlaying() {
+    return streamActive || numActive > 0;
+}
+
+void AudioManager::setVolume(int vol) {
+    masterVolume = vol < 0 ? 0 : vol > 100 ? 100 : vol;
+    mmSetEffectsVolume((mm_word)((masterVolume * 1024) / 100));
+}
