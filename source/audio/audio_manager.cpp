@@ -250,8 +250,7 @@ void AudioManager::update()
 {
     for (int i = 0; i < activeHandleCount; )
     {
-        // Remove finished sounds
-        if (mmEffectStatus(activeHandles[i]) != MM_ACTIVE)
+        if (!mmEffectPlaying(activeHandles[i]))
         {
             activeHandles[i] = activeHandles[--activeHandleCount];
         }
