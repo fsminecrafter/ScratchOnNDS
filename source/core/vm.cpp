@@ -314,32 +314,42 @@ void ScratchVM::executeThread(ScriptThread& thread, double /*dt*/) {
                 }
                 if (frame.remaining > 0) frame.remaining--;
                 if (frame.remaining == 0) {
+                
                     thread.callStack.pop_back();
-                    // Continue after the loop block
-                    if (!thread.callStack.empty())
+                
+                    if (!thread.callStack.empty()) {
+                
                         strncpy(thread.currentBlockId,
                                 thread.callStack.back().returnBlockId,
                                 MAX_BLOCK_ID);
-                    
+                
                         thread.currentBlockId[MAX_BLOCK_ID] = '\0';
-                    else {
-                        // find next after the loop's own block
-                        ScratchBlock* lb = getBlock(thread, frame.loopBlockId);
-                        if (lb) {
-                            strncpy(thread.currentBlockId, lb->nextId, MAX_BLOCK_ID);
-                            thread.currentBlockId[MAX_BLOCK_ID] = '\0';
-                        } else {
-                            thread.currentBlockId[0] = '\0';
-                        }
-                    }
-                } else {
-                    // Repeat next iteration: jump back to substack start
-                    ScratchBlock* lb = getBlock(thread, frame.loopBlockId);
-                    if (lb && inputHas(lb, "SUBSTACK"))
-                        strncpy(thread.currentBlockId, inputGet(b,"SUBSTACK").blockId, MAX_BLOCK_ID); thread.currentBlockId[MAX_BLOCK_ID]= '\0';
-                    else
+                
+                    } else {
+                
                         thread.currentBlockId[0] = '\0';
-                    return; // yield for one frame per iteration (cooperative)
+                    }
+                
+                } else {
+                
+                    frame.remaining--;
+                
+                    ScratchBlock* lb = getBlock(thread, frame.loopBlockId);
+                
+                    if (lb && inputHas(lb, "SUBSTACK")) {
+                
+                        strncpy(thread.currentBlockId,
+                                inputGet(lb, "SUBSTACK").blockId,
+                                MAX_BLOCK_ID);
+                
+                        thread.currentBlockId[MAX_BLOCK_ID] = '\0';
+                
+                    } else {
+                
+                        thread.currentBlockId[0] = '\0';
+                    }
+                
+                    return;
                 }
                 if (!thread.currentBlockId[0]=='\0') return;
             }
@@ -389,8 +399,11 @@ ScratchValue ScratchVM::execMotion(ScriptThread& t, ScratchBlock* b, bool& yield
             double ey   = inputHas(b, "Y") ? evaluateInput(t, inputGet(b,"Y")).toNum() : s->y;
             StackFrame gf;
             gf.isGlide       = true;
-            gf.loopBlockId   = b->id;
-            gf.returnBlockId = b->nextId;
+            strncpy(gf.loopBlockId, b->id, MAX_BLOCK_ID);
+            gf.loopBlockId[MAX_BLOCK_ID] = '\0';
+            
+            strncpy(gf.returnBlockId, b->nextId, MAX_BLOCK_ID);
+            gf.returnBlockId[MAX_BLOCK_ID] = '\0';
             gf.glideStartX   = s->x;
             gf.glideStartY   = s->y;
             gf.glideEndX     = ex;
@@ -617,7 +630,7 @@ ScratchValue ScratchVM::execControl(ScriptThread& t, ScratchBlock* b, bool& yiel
                         evaluateInput(t, inputGet(b,"CONDITION")).toBool();
             if (!cond) {
                 StackFrame fr;
-                fr.isWaitUntil = true;
+                fr.setWaitUntil(true);
                 if (inputHas(b, "CONDITION")) {
                     strncpy(fr.condBlockId,
                             inputGet(b, "CONDITION").blockId,
@@ -1098,7 +1111,7 @@ void ScratchVM::broadcastAndWait(ScriptThread& caller, const std::string& name) 
     if (br.threadsLaunched == 0) return;  // no one listening, don't wait
     broadcasts.push_back(br);
     StackFrame fr;
-    fr.isBroadcastWait = true;
+    fr.setBroadcastWait(true);
     strncpy(fr.broadcastName, name.c_str(), 31); fr.broadcastName[31]= '\0';
     fr.remaining       = 1;
     fr.loopBlockId     = "";
